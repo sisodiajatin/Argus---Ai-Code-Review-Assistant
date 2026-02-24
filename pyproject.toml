@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argus"
+version = "0.1.0"
+description = "Argus - The All-Seeing Code Reviewer. AI-powered code review CLI, GitHub webhook, and GitHub Action."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Jatin Sisodiya", email = "sisodiajatin@users.noreply.github.com"},
+]
+keywords = ["code-review", "ai", "github", "cli", "llm", "developer-tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "openai>=1.59.0",
+    "tiktoken>=0.8.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.0.1",
+    "sqlalchemy>=2.0.36",
+    "aiosqlite>=0.20.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sisodiajatin/argus"
+Repository = "https://github.com/sisodiajatin/argus"
+Issues = "https://github.com/sisodiajatin/argus/issues"
+
+[project.scripts]
+argus = "cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["app*", "cli*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

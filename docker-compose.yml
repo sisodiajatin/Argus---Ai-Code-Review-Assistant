@@ -1,0 +1,26 @@
+services:
+  argus:
+    build: .
+    container_name: argus-server
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/codereview.db
+    volumes:
+      # Persistent database storage
+      - argus-data:/data
+      # Mount GitHub App private key if it exists (optional)
+      - ./private-key.pem:/app/private-key.pem:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  argus-data:
+    driver: local

@@ -1,0 +1,78 @@
+name: "Argus Code Review"
+description: "AI-powered code review that posts findings as PR comments"
+branding:
+  icon: "eye"
+  color: "purple"
+
+inputs:
+  ai_api_key:
+    description: "API key for the AI provider (OpenAI-compatible)"
+    required: true
+  ai_model:
+    description: "AI model name"
+    required: false
+    default: "llama-3.3-70b-versatile"
+  ai_base_url:
+    description: "Base URL for the AI API"
+    required: false
+    default: "https://api.groq.com/openai/v1"
+  base_branch:
+    description: "Base branch to compare against"
+    required: false
+    default: ""
+  ignore_paths:
+    description: "Comma-separated glob patterns to ignore"
+    required: false
+    default: ""
+  python_version:
+    description: "Python version to use"
+    required: false
+    default: "3.12"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Argus
+      shell: bash
+      run: |
+        pip install -q git+https://github.com/${{ github.repository }}.git || \
+        pip install -q -e ${{ github.action_path }}
+
+    - name: Run Argus Review
+      shell: bash
+      env:
+        AI_API_KEY: ${{ inputs.ai_api_key }}
+        AI_MODEL: ${{ inputs.ai_model }}
+        AI_BASE_URL: ${{ inputs.ai_base_url }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        # Determine base branch
+        BASE="${{ inputs.base_branch }}"
+        if [ -z "$BASE" ]; then
+          BASE="${{ github.event.pull_request.base.ref }}"
+        fi
+        if [ -z "$BASE" ]; then
+          BASE="main"
+        fi
+
+        # Fetch base branch for diff
+        git fetch origin "$BASE" --depth=1 2>/dev/null || true
+
+        # Run review
+        argus review --base "$BASE" --type committed --format json > /tmp/argus-results.json 2>/dev/null || true
+
+    - name: Post PR Comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        python3 "${{ github.action_path }}/action_post_comment.py" \
+          "${{ github.repository }}" \
+          "${{ github.event.pull_request.number }}" \
+          /tmp/argus-results.json

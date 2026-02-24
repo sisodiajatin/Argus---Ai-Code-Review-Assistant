@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: argus
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: APP_HOST
+        value: "0.0.0.0"
+      - key: APP_PORT
+        value: "8000"
+      - key: DATABASE_URL
+        value: "sqlite+aiosqlite:////data/codereview.db"
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: "llama-3.3-70b-versatile"
+      - key: AI_BASE_URL
+        value: "https://api.groq.com/openai/v1"
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_PRIVATE_KEY
+        sync: false
+    disk:
+      name: argus-data
+      mountPath: /data
+      sizeGB: 1
+    healthCheckPath: /api/health

@@ -1,0 +1,43 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node
+dashboard/node_modules/
+dashboard/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Data / secrets (mounted at runtime)
+*.db
+*.pem
+.env
+.env.*
+
+# Tests (not needed in production image)
+tests/
+
+# Docs
+docs/
+*.md
+
+# OS
+.DS_Store
+Thumbs.db
