@@ -23,8 +23,4 @@ services:
         sync: false
       - key: GITHUB_PRIVATE_KEY
         sync: false
-    disk:
-      name: argus-data
-      mountPath: /data
-      sizeGB: 1
     healthCheckPath: /api/health
