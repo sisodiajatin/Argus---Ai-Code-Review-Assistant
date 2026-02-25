@@ -1,11 +1,16 @@
 # Argus — The All-Seeing Code Reviewer
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen.svg)](#running-tests)
+[![Tests](https://img.shields.io/badge/tests-184%20passing-brightgreen.svg)](#running-tests)
+[![PyPI](https://img.shields.io/pypi/v/argus-ai-review.svg)](https://pypi.org/project/argus-ai-review/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub Action](https://img.shields.io/badge/GitHub%20Action-available-purple.svg)](#github-action)
 
 AI-powered code review that works everywhere — as a **GitHub webhook**, a **CLI tool**, and a **GitHub Action**. Uses any OpenAI-compatible LLM (Groq, Gemini, GPT-4, DeepSeek, Llama) to analyze diffs and post findings directly on pull requests.
+
+<p align="center">
+  <img src="assets/argus-tui.png" alt="Argus TUI" width="700">
+</p>
 
 ---
 
@@ -57,11 +62,27 @@ Code Changes  -->  Diff Parser  -->  Smart Chunker  -->  AI Analyzer  -->  Resul
   - [DeepSeek](https://platform.deepseek.com/api_keys) (very cheap)
   - [OpenAI](https://platform.openai.com/api-keys) (paid)
 
-### Install & Configure
+### Install via pip (Recommended)
 
 ```bash
-git clone https://github.com/sisodiajatin/argus.git
-cd argus
+pip install argus-ai-review
+```
+
+Then configure your API key:
+
+```bash
+argus config set ai.api_key YOUR_API_KEY
+argus config set ai.base_url https://api.groq.com/openai/v1
+argus config set ai.model llama-3.3-70b-versatile
+```
+
+> **Windows users:** If `argus` is not recognized after install, you need to add Python's Scripts folder to your PATH. Run `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"` to find the path, then add it to your system PATH environment variable and restart your terminal.
+
+### Install from Source (For Development)
+
+```bash
+git clone https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant.git
+cd Argus---Ai-Code-Review-Assistant
 
 python -m venv venv
 source venv/bin/activate   # Linux/Mac
@@ -281,7 +302,7 @@ argus/
 │       ├── pages/                # Dashboard, Settings, ReviewDetail
 │       ├── components/           # Sidebar, Charts
 │       └── api/                  # API client
-├── tests/                        # 160 tests
+├── tests/                        # 184 tests
 ├── action.yml                    # GitHub Action definition
 ├── action_post_comment.py        # Action PR comment poster
 ├── Dockerfile                    # Multi-stage Docker build
