@@ -9,6 +9,14 @@
 AI-powered code review that works everywhere — as a **GitHub webhook**, a **CLI tool**, and a **GitHub Action**. Uses any OpenAI-compatible LLM (Groq, Gemini, GPT-4, DeepSeek, Llama) to analyze diffs and post findings directly on pull requests.
 
 <p align="center">
+  <a href="docs/media/argus-launch.mp4">
+    <img src="docs/media/argus-preview.gif" alt="Argus demo: the CLI finds a SQL injection and suggests a fix, the dashboard tracks the review, and the GitHub Action is three lines of YAML" width="100%">
+  </a>
+  <br>
+  ▶ <a href="docs/media/argus-launch.mp4">Watch the full launch video with sound</a>
+</p>
+
+<p align="center">
   <img src="assets/argus-tui.png" alt="Argus TUI" width="700">
 </p>
 
