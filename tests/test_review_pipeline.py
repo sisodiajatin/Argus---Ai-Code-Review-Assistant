@@ -1,7 +1,7 @@
 """Tests for the ReviewPipeline service."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.review_pipeline import ReviewPipeline, ReviewResult
 from app.services.vcs.base import PRFile

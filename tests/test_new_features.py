@@ -5,15 +5,14 @@
 4. Finding feedback (model + API)
 """
 
-import json
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.models.schemas import AIFinding, ReviewChunk, FileChange
-from app.services.analyzer import AIAnalyzer
+from app.models.schemas import AIFinding
+from app.services.analyzer import AIAnalyzer, ChunkAnalysisError
 from app.services.publisher import ReviewPublisher
-from app.services.review_pipeline import ReviewPipeline, ReviewResult, SEVERITY_RANK
+from app.services.review_pipeline import ReviewPipeline, SEVERITY_RANK
 from cli.config_file import _parse_yaml
 
 
@@ -28,8 +27,8 @@ class TestAnalyzerRetry:
         assert AIAnalyzer.RETRY_BASE_DELAY == 5
 
     @pytest.mark.asyncio
-    async def test_rate_limit_respects_max_retries(self):
-        """After MAX_RETRIES rate-limit errors, should return gracefully."""
+    async def test_non_retryable_error_raises_without_retry(self):
+        """Auth/bad-request errors fail immediately instead of retrying."""
         import openai
 
         analyzer = AIAnalyzer.__new__(AIAnalyzer)
@@ -40,9 +39,9 @@ class TestAnalyzerRetry:
         analyzer.client.chat = MagicMock()
         analyzer.client.chat.completions = MagicMock()
         analyzer.client.chat.completions.create = AsyncMock(
-            side_effect=openai.RateLimitError(
-                message="rate limited",
-                response=MagicMock(status_code=429, headers={}),
+            side_effect=openai.AuthenticationError(
+                message="bad key",
+                response=MagicMock(status_code=401, headers={}),
                 body=None,
             )
         )
@@ -51,14 +50,12 @@ class TestAnalyzerRetry:
         chunk.chunk_id = "test_chunk"
         chunk.files = []
 
-        with patch("app.services.analyzer.asyncio.sleep", new_callable=AsyncMock):
-            result = await analyzer.analyze_chunk(
-                chunk, "Test PR", "author", "main",
-                _retry_count=AIAnalyzer.MAX_RETRIES,
-            )
+        with patch("app.services.analyzer.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(ChunkAnalysisError):
+                await analyzer.analyze_chunk(chunk, "Test PR", "author", "main")
 
-        assert result.findings == []
-        assert "Rate limit exceeded" in result.summary
+        assert mock_sleep.call_count == 0
+        assert analyzer.client.chat.completions.create.call_count == 1
 
     @pytest.mark.asyncio
     async def test_rate_limit_retries_with_backoff(self):
@@ -91,9 +88,10 @@ class TestAnalyzerRetry:
         chunk.files = []
 
         with patch("app.services.analyzer.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await analyzer.analyze_chunk(chunk, "Test PR", "author")
+            with pytest.raises(ChunkAnalysisError):
+                await analyzer.analyze_chunk(chunk, "Test PR", "author")
 
-        assert "Rate limit exceeded" in result.summary
+        assert call_count == AIAnalyzer.MAX_RETRIES + 1
         assert mock_sleep.call_count == AIAnalyzer.MAX_RETRIES
         delays = [call.args[0] for call in mock_sleep.call_args_list]
         assert delays[0] == 5   # 5 * 2^0

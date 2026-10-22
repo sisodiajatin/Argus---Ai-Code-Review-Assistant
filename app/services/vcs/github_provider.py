@@ -1,22 +1,35 @@
 """GitHub VCS provider implementation.
 
-Uses PyGithub for API interactions and handles GitHub App authentication
-with installation tokens.
+Talks to the GitHub REST API with httpx and handles GitHub App
+authentication with installation tokens.
 """
 
 import hashlib
 import hmac
 import logging
 import time
+from datetime import datetime
 
 import httpx
 import jwt
-from github import Github, GithubIntegration, Auth
 
 from app.config import get_settings
 from app.services.vcs.base import VCSProvider, PRInfo, PRFile
 
 logger = logging.getLogger(__name__)
+
+SUMMARY_MARKER = "<!-- argus-review-summary -->"
+
+API_ROOT = "https://api.github.com"
+
+# GitHub caps list endpoints at 100 items per page; PR files at 3000 total.
+PER_PAGE = 100
+MAX_PAGES = 30
+
+# Installation tokens are shared by every GitHubProvider instance (one is
+# created per webhook), so a token is reused until it nears expiry.
+# installation_id -> (token, expires_at_epoch)
+_installation_tokens: dict[int, tuple[str, float]] = {}
 
 
 class GitHubProvider(VCSProvider):
@@ -24,8 +37,6 @@ class GitHubProvider(VCSProvider):
 
     def __init__(self):
         self.settings = get_settings()
-        self._integration: GithubIntegration | None = None
-        self._installation_tokens: dict[int, tuple[str, float]] = {}  # installation_id -> (token, expires_at)
 
     def _read_private_key(self) -> str:
         """Read GitHub App private key from env var or file."""
@@ -36,32 +47,14 @@ class GitHubProvider(VCSProvider):
         with open(self.settings.github_private_key_path, "r") as f:
             return f.read()
 
-    def _get_integration(self) -> GithubIntegration:
-        """Get or create the GitHub App integration."""
-        if self._integration is None:
-            private_key = self._read_private_key()
-
-            auth = Auth.AppAuth(
-                app_id=int(self.settings.github_app_id),
-                private_key=private_key,
-            )
-            self._integration = GithubIntegration(auth=auth)
-        return self._integration
-
-    def _get_github_client(self, installation_id: int) -> Github:
-        """Get an authenticated GitHub client for a specific installation."""
-        integration = self._get_integration()
-        return integration.get_github_for_installation(installation_id)
-
     async def _get_installation_token(self, installation_id: int) -> str:
         """Get or refresh an installation access token."""
         now = time.time()
 
-        # Check if we have a cached, non-expired token
-        if installation_id in self._installation_tokens:
-            token, expires_at = self._installation_tokens[installation_id]
-            if now < expires_at - 60:  # 60s buffer before expiry
-                return token
+        # Reuse a cached token until 60s before it expires
+        cached = _installation_tokens.get(installation_id)
+        if cached and now < cached[1] - 60:
+            return cached[0]
 
         # Generate a new JWT
         private_key = self._read_private_key()
@@ -74,9 +67,9 @@ class GitHubProvider(VCSProvider):
         encoded_jwt = jwt.encode(payload, private_key, algorithm="RS256")
 
         # Exchange JWT for installation token
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+                f"{API_ROOT}/app/installations/{installation_id}/access_tokens",
                 headers={
                     "Authorization": f"Bearer {encoded_jwt}",
                     "Accept": "application/vnd.github+json",
@@ -87,9 +80,20 @@ class GitHubProvider(VCSProvider):
             data = response.json()
 
         token = data["token"]
-        expires_at = now + 3600  # Tokens are valid for 1 hour
-        self._installation_tokens[installation_id] = (token, expires_at)
+        try:
+            expires_at = datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError):
+            expires_at = now + 3600  # documented lifetime
+        _installation_tokens[installation_id] = (token, expires_at)
         return token
+
+    async def _headers(self, installation_id: int) -> dict[str, str]:
+        token = await self._get_installation_token(installation_id)
+        return {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
     async def _make_api_request(
         self,
@@ -99,23 +103,39 @@ class GitHubProvider(VCSProvider):
         json_data: dict | None = None,
     ) -> dict | list:
         """Make an authenticated API request to GitHub."""
-        token = await self._get_installation_token(installation_id)
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-
+        headers = await self._headers(installation_id)
         async with httpx.AsyncClient() as client:
             response = await client.request(
                 method=method,
-                url=f"https://api.github.com{url}",
+                url=f"{API_ROOT}{url}",
                 headers=headers,
                 json=json_data,
                 timeout=30.0,
             )
             response.raise_for_status()
             return response.json()
+
+    async def _paginate(self, url: str, installation_id: int) -> list:
+        """GET every page of a list endpoint, following Link: rel="next".
+
+        GitHub returns 30 items per page by default; reading only the first
+        page silently truncates large PRs.
+        """
+        headers = await self._headers(installation_id)
+        separator = "&" if "?" in url else "?"
+        next_url: str | None = f"{API_ROOT}{url}{separator}per_page={PER_PAGE}"
+        items: list = []
+        pages = 0
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while next_url and pages < MAX_PAGES:
+                response = await client.get(next_url, headers=headers)
+                response.raise_for_status()
+                items.extend(response.json())
+                next_url = response.links.get("next", {}).get("url")
+                pages += 1
+        if next_url:
+            logger.warning(f"Stopped paginating {url} after {MAX_PAGES} pages")
+        return items
 
     async def get_pr_info(
         self,
@@ -148,9 +168,8 @@ class GitHubProvider(VCSProvider):
         pr_number: int,
         installation_id: int | None = None,
     ) -> list[PRFile]:
-        """Fetch the list of files changed in a PR."""
-        data = await self._make_api_request(
-            "GET",
+        """Fetch every file changed in a PR (all pages)."""
+        data = await self._paginate(
             f"/repos/{repo_full_name}/pulls/{pr_number}/files",
             installation_id=installation_id or 0,
         )
@@ -180,7 +199,7 @@ class GitHubProvider(VCSProvider):
             token = await self._get_installation_token(installation_id or 0)
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"https://api.github.com/repos/{repo_full_name}/contents/{path}",
+                    f"{API_ROOT}/repos/{repo_full_name}/contents/{path}",
                     params={"ref": ref},
                     headers={
                         "Authorization": f"token {token}",
@@ -226,6 +245,49 @@ class GitHubProvider(VCSProvider):
         except Exception as e:
             logger.error(f"Failed to post review comment on {file_path}:{line}: {e}")
             return None
+
+    async def list_review_comments(
+        self,
+        repo_full_name: str,
+        pr_number: int,
+        installation_id: int | None = None,
+    ) -> list[dict]:
+        """All inline review comments on a PR (used to avoid re-posting)."""
+        try:
+            return await self._paginate(
+                f"/repos/{repo_full_name}/pulls/{pr_number}/comments",
+                installation_id=installation_id or 0,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to list review comments: {e}")
+            return []
+
+    async def create_review(
+        self,
+        repo_full_name: str,
+        pr_number: int,
+        commit_sha: str,
+        comments: list[dict],
+        body: str = "",
+        installation_id: int | None = None,
+    ) -> int | None:
+        """Post all inline comments as ONE review (one API call, one notification).
+
+        Each comment is {"path", "line", "side", "body"}. Raises
+        httpx.HTTPStatusError on failure so callers can fall back.
+        """
+        data = await self._make_api_request(
+            "POST",
+            f"/repos/{repo_full_name}/pulls/{pr_number}/reviews",
+            installation_id=installation_id or 0,
+            json_data={
+                "commit_id": commit_sha,
+                "event": "COMMENT",
+                "body": body,
+                "comments": comments,
+            },
+        )
+        return data.get("id")
 
     async def post_review_summary(
         self,
@@ -292,14 +354,13 @@ class GitHubProvider(VCSProvider):
     ) -> int | None:
         """Find an existing Argus summary comment on a PR to edit on re-push."""
         try:
-            comments = await self._make_api_request(
-                "GET",
+            comments = await self._paginate(
                 f"/repos/{repo_full_name}/issues/{pr_number}/comments",
                 installation_id=installation_id or 0,
             )
             for comment in comments:
-                body = comment.get("body", "")
-                if "<!-- argus-review-summary -->" in body:
+                body = comment.get("body") or ""
+                if SUMMARY_MARKER in body:
                     return comment["id"]
         except Exception as e:
             logger.warning(f"Failed to search for bot comment: {e}")

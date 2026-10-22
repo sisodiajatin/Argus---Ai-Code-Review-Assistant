@@ -3,8 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.models.database import init_db, close_db, get_engine
+from app.main import app, create_app
 
 
 @pytest.fixture
@@ -12,6 +11,17 @@ def client():
     """Create a test client with database tables initialized."""
     # Use the app's lifespan by entering the TestClient context manager
     with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def spa_client(tmp_path):
+    """Client for an app serving a temporary React build (no npm build needed)."""
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Argus</title>")
+    (dist / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    with TestClient(create_app(build_dir=dist)) as c:
         yield c
 
 
@@ -105,8 +115,8 @@ class TestReReview:
         response = client.post("/api/dashboard/reviews/99999/re-review")
         assert response.status_code == 404
 
-    def test_settings_serves_spa(self, client):
-        response = client.get("/settings")
+    def test_settings_serves_spa(self, spa_client):
+        response = spa_client.get("/settings")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
@@ -114,27 +124,27 @@ class TestReReview:
 class TestSPARouting:
     """Test that non-API routes serve the React SPA index.html."""
 
-    def test_root_serves_spa(self, client):
-        response = client.get("/")
+    def test_root_serves_spa(self, spa_client):
+        response = spa_client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_dashboard_serves_spa(self, client):
-        response = client.get("/dashboard")
+    def test_dashboard_serves_spa(self, spa_client):
+        response = spa_client.get("/dashboard")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_login_serves_spa(self, client):
-        response = client.get("/login")
+    def test_login_serves_spa(self, spa_client):
+        response = spa_client.get("/login")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_repos_serves_spa(self, client):
-        response = client.get("/repos")
+    def test_repos_serves_spa(self, spa_client):
+        response = spa_client.get("/repos")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_analytics_serves_spa(self, client):
-        response = client.get("/analytics")
+    def test_analytics_serves_spa(self, spa_client):
+        response = spa_client.get("/analytics")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]

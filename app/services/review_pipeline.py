@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 
 from app.config import BaseAppSettings, get_base_settings
-from app.models.schemas import AIFinding, FileChange
+from app.models.schemas import AIFinding
 from app.services.vcs.base import PRFile
 from app.services.diff_parser import DiffParser
 from app.services.chunker import SmartChunker
@@ -92,16 +92,19 @@ class ReviewPipeline:
             pr_author=author,
             base_branch=base_branch,
         )
-        summary_task = self.analyzer.generate_pr_summary(
+        summary_task = self.analyzer.generate_pr_summary_with_usage(
             chunks=chunks,
             pr_title=title,
             pr_author=author,
             base_branch=base_branch,
         )
 
-        (all_findings, summary_text, total_tokens, analysis_time_ms), pr_description = (
+        # If any chunk fails, analyze_pr raises ReviewIncompleteError and the
+        # whole run fails: a partially reviewed diff must not look clean.
+        (all_findings, summary_text, total_tokens, _), (pr_description, desc_tokens) = (
             await asyncio.gather(review_task, summary_task)
         )
+        total_tokens += desc_tokens
 
         # Post-analysis filtering: apply focus categories and severity threshold
         filtered_findings = self._filter_findings(all_findings)

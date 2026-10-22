@@ -5,8 +5,13 @@ Used by the GitHub Action to post findings after running argus review.
 
 import json
 import os
+import re
 import sys
+import urllib.error
 import urllib.request
+
+MARKER = "<!-- argus-review-summary -->"
+API = "https://api.github.com"
 
 
 def main():
@@ -41,7 +46,7 @@ def main():
     suggestions = sum(1 for f in findings if f.get("severity") == "suggestion")
 
     # Build comment body
-    parts = ["<!-- argus-review-summary -->"]
+    parts = [MARKER]
     parts.append("## 👁️ Argus Code Review")
     parts.append("")
 
@@ -55,11 +60,11 @@ def main():
     if critical > 0:
         parts.append(f"**Status:** 🔴 **{critical} critical issue{'s' if critical != 1 else ''} found**")
     elif warnings > 0:
-        parts.append(f"**Status:** 🟡 **Minor issues found**")
+        parts.append("**Status:** 🟡 **Minor issues found**")
     elif findings:
-        parts.append(f"**Status:** 🟢 **Suggestions only — looking good!**")
+        parts.append("**Status:** 🟢 **Suggestions only — looking good!**")
     else:
-        parts.append(f"**Status:** ✅ **No issues found — great job!**")
+        parts.append("**Status:** ✅ **No issues found — great job!**")
 
     parts.append("")
 
@@ -75,7 +80,6 @@ def main():
         parts.append("")
 
     # Top findings
-    severity_map = {"🔴": "critical", "🟡": "warning", "🟢": "suggestion"}
     emoji_map = {"critical": "🔴", "warning": "🟡", "suggestion": "🟢"}
     top = [f for f in findings if f.get("severity") in ("critical", "warning")][:5]
     if top:
@@ -93,62 +97,66 @@ def main():
         parts.append("")
 
     parts.append("---")
-    parts.append("*Powered by [Argus](https://github.com/sisodiajatin/argus) — GitHub Action*")
+    parts.append("*Powered by [Argus](https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant) — GitHub Action*")
 
     body = "\n".join(parts)
 
     # Check for existing Argus comment to edit
-    comment_id = find_existing_comment(repo, pr_number, token)
+    try:
+        comment_id = find_existing_comment(repo, pr_number, token)
+        if comment_id:
+            edit_comment(repo, comment_id, body, token)
+            print(f"Updated existing Argus comment #{comment_id}")
+        else:
+            post_comment(repo, pr_number, body, token)
+            print(f"Posted Argus review comment on PR #{pr_number}")
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            print(
+                "::warning::Could not post the Argus comment (HTTP "
+                f"{e.code}). Give the workflow 'permissions: pull-requests: write'. "
+                "PRs from forks get a read-only token."
+            )
+        else:
+            print(f"::warning::Could not post the Argus comment: HTTP {e.code} {e.reason}")
+    # Failing the job on critical findings is the action's 'fail_on_critical' step.
 
-    if comment_id:
-        edit_comment(repo, comment_id, body, token)
-        print(f"Updated existing Argus comment #{comment_id}")
-    else:
-        post_comment(repo, pr_number, body, token)
-        print(f"Posted Argus review comment on PR #{pr_number}")
 
-    # Exit with failure if critical issues
-    if critical > 0:
-        sys.exit(1)
+def _request(url, token, method="GET", payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    return urllib.request.urlopen(req, timeout=30)
+
+
+def _next_link(link_header):
+    """Return the rel="next" URL from a GitHub Link header, if any."""
+    match = re.search(r'<([^>]+)>;\s*rel="next"', link_header or "")
+    return match.group(1) if match else None
 
 
 def find_existing_comment(repo, pr_number, token):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-    })
-    try:
-        with urllib.request.urlopen(req) as resp:
-            comments = json.loads(resp.read())
-            for c in comments:
-                if "<!-- argus-review-summary -->" in c.get("body", ""):
+    """Find our summary comment, walking every page of PR comments."""
+    url = f"{API}/repos/{repo}/issues/{pr_number}/comments?per_page=100"
+    while url:
+        with _request(url, token) as resp:
+            for c in json.loads(resp.read()):
+                if MARKER in (c.get("body") or ""):
                     return c["id"]
-    except Exception:
-        pass
+            url = _next_link(resp.headers.get("Link"))
     return None
 
 
 def edit_comment(repo, comment_id, body, token):
-    url = f"https://api.github.com/repos/{repo}/issues/comments/{comment_id}"
-    data = json.dumps({"body": body}).encode()
-    req = urllib.request.Request(url, data=data, method="PATCH", headers={
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-        "Content-Type": "application/json",
-    })
-    urllib.request.urlopen(req)
+    _request(f"{API}/repos/{repo}/issues/comments/{comment_id}", token, "PATCH", {"body": body}).close()
 
 
 def post_comment(repo, pr_number, body, token):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-    data = json.dumps({"body": body}).encode()
-    req = urllib.request.Request(url, data=data, method="POST", headers={
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-        "Content-Type": "application/json",
-    })
-    urllib.request.urlopen(req)
+    _request(f"{API}/repos/{repo}/issues/{pr_number}/comments", token, "POST", {"body": body}).close()
 
 
 if __name__ == "__main__":

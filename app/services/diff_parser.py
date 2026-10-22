@@ -167,6 +167,22 @@ class DiffParser:
                     changed_lines.append(line.new_line_number)
         return changed_lines
 
+    @staticmethod
+    def commentable_lines(file_changes: list[FileChange]) -> dict[str, set[int]]:
+        """New-side line numbers GitHub accepts review comments on, per file.
+
+        That's every added or context line inside a hunk; anything else is
+        rejected by the API with HTTP 422.
+        """
+        result: dict[str, set[int]] = {}
+        for fc in file_changes:
+            lines = result.setdefault(fc.file_path, set())
+            for hunk in fc.hunks:
+                for line in hunk.lines:
+                    if line.line_type in ("add", "context") and line.new_line_number:
+                        lines.add(line.new_line_number)
+        return result
+
     def format_diff_for_llm(self, file_change: FileChange) -> str:
         """Format a file change into a readable string for LLM analysis.
 

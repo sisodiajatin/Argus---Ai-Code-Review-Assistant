@@ -1,9 +1,7 @@
 """Tests for PR auto-summarization feature."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from app.models.schemas import AIFinding, FileChange, ReviewChunk
 from app.prompts.review import build_pr_summary_prompt
 from app.services.review_pipeline import ReviewResult
 

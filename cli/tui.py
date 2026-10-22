@@ -8,9 +8,7 @@ Provides a full-screen CodeRabbit-like experience with:
 """
 
 import io
-import os
 import sys
-import time
 
 from rich.console import Console
 from rich.panel import Panel
@@ -18,21 +16,14 @@ from rich.table import Table
 from rich.text import Text
 from rich.rule import Rule
 from rich.align import Align
-from rich.columns import Columns
 from rich.live import Live
-from rich.spinner import Spinner
-from rich.layout import Layout
-from rich.box import HEAVY, ROUNDED, SIMPLE, DOUBLE
 
 from cli.banner import (
-    ARGUS_LOGO,
     GRADIENT_COLORS,
-    TAGLINE,
     SEVERITY_COLORS,
     CATEGORY_LABELS,
     PRIMARY,
     SECONDARY,
-    ACCENT,
     DIM_TEXT,
     BORDER_COLOR,
     render_logo,
@@ -111,17 +102,11 @@ class ArgusTUI:
 
         branch_text = Text()
         branch_text.append("    branch: ", style=DIM_TEXT)
-        branch_text.append(branch, style=f"bold white")
+        branch_text.append(branch, style="bold white")
         branch_text.append(f"  ({review_type})", style=DIM_TEXT)
         self.console.print(self._center(branch_text))
 
         self.console.print()
-
-        # File stats
-        added = 0
-        modified = 0
-        for _ in range(file_count):
-            pass  # We just use the total count
 
         stats_lines = []
 
@@ -168,7 +153,7 @@ class ArgusTUI:
         bar.add_column(ratio=1)
         bar.add_column(justify="right", width=20)
 
-        left = Text(f" {text}", style=f"bold white on #1A1A2E")
+        left = Text(f" {text}", style="bold white on #1A1A2E")
         right = Text()
         right.append(" \u25C9 ", style=f"bold {PRIMARY} on #1A1A2E")
         right.append("argus ", style=f"bold {GRADIENT_COLORS[2]} on #1A1A2E")
@@ -298,8 +283,8 @@ class ArgusTUI:
             content.append(f"{location}\n", style=DIM_TEXT)
             content.append(f"\n{finding.description}", style="white")
             if finding.suggested_fix:
-                content.append(f"\n\n", style="white")
-                content.append("Fix: ", style=f"bold #22C55E")
+                content.append("\n\n", style="white")
+                content.append("Fix: ", style="bold #22C55E")
                 content.append(finding.suggested_fix, style="#22C55E")
 
             # Title with severity badge

@@ -70,9 +70,9 @@ class TestDiffParser:
         hunk = results[0].hunks[0]
 
         # Check that we have the right line types
-        add_lines = [l for l in hunk.lines if l.line_type == "add"]
-        delete_lines = [l for l in hunk.lines if l.line_type == "delete"]
-        context_lines = [l for l in hunk.lines if l.line_type == "context"]
+        add_lines = [ln for ln in hunk.lines if ln.line_type == "add"]
+        delete_lines = [ln for ln in hunk.lines if ln.line_type == "delete"]
+        context_lines = [ln for ln in hunk.lines if ln.line_type == "context"]
 
         assert len(add_lines) == 3  # import sys, print("hello world"), return True
         assert len(delete_lines) == 1  # print("hello")
@@ -104,7 +104,7 @@ class TestDiffParser:
         results = parser.parse_pr_files([pr_file])
         assert results[0].status == "added"
         assert len(results[0].hunks) == 1
-        assert all(l.line_type == "add" for l in results[0].hunks[0].lines)
+        assert all(ln.line_type == "add" for ln in results[0].hunks[0].lines)
 
     def test_parse_empty_patch(self, parser):
         pr_file = PRFile(

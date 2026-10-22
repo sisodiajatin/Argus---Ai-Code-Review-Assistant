@@ -46,11 +46,14 @@ class TestOAuthEndpoints:
     def test_github_login_no_client_id(self, client):
         """OAuth login should fail when client ID is not configured."""
         response = client.get("/auth/github/login", follow_redirects=False)
-        # Should return 500 since OAuth is not configured
-        assert response.status_code == 500
+        # 503: the server is up but OAuth isn't configured
+        assert response.status_code == 503
+        assert "GITHUB_CLIENT_ID" in response.json()["detail"]
 
-    def test_github_callback_invalid_state(self, client):
+    def test_github_callback_invalid_state(self, client, monkeypatch):
         """OAuth callback should reject invalid state."""
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "cid")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "csecret")
         response = client.get(
             "/auth/github/callback?code=test&state=invalid",
             follow_redirects=False,

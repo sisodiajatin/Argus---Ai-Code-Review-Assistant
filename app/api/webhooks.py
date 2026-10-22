@@ -4,7 +4,6 @@ Receives webhook events from GitHub, validates their signatures,
 and triggers the code review pipeline for pull request events.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -16,8 +15,10 @@ from app.config import get_settings
 from app.models.database import get_db
 from app.models.repository import Repository
 from app.models.pull_request import PullRequest, PRStatus
-from app.models.review import ReviewFinding, ReviewSummary, FindingCategory, FindingSeverity
+from app.models.review import ReviewFinding, ReviewSummary
 from app.models.schemas import WebhookResponse
+from app.services.analyzer import ReviewIncompleteError
+from app.services.background import spawn
 from app.services.vcs.github_provider import GitHubProvider
 from app.services.review_pipeline import ReviewPipeline
 from app.services.publisher import ReviewPublisher
@@ -90,6 +91,16 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     head_sha = pr_data.get("head", {}).get("sha", "")
 
+    # GitHub redelivers webhooks on timeouts, and "reopened" can repeat a SHA we
+    # already reviewed. Don't run (and pay for) the same review twice; the
+    # dashboard's re-review button is the explicit way to re-run one.
+    if pr_record.status in (PRStatus.REVIEWING.value, PRStatus.COMPLETED.value):
+        return WebhookResponse(
+            status="ignored",
+            message=f"Commit {head_sha[:8]} is already {pr_record.status}",
+            pr_number=pr_number,
+        )
+
     # Set pending commit status check
     try:
         await github_provider.set_commit_status(
@@ -102,8 +113,8 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.warning(f"Failed to set pending status: {e}")
 
-    # Trigger the review pipeline asynchronously
-    asyncio.create_task(
+    # Trigger the review pipeline in the background
+    spawn(
         _run_review_pipeline(
             db_url=settings.database_url,
             repo_full_name=repo_full_name,
@@ -116,7 +127,8 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             head_sha=head_sha,
             base_branch=pr_data.get("base", {}).get("ref", "main"),
             ignored_paths=repo.ignored_paths,
-        )
+        ),
+        name=f"review:{repo_full_name}#{pr_number}",
     )
 
     return WebhookResponse(
@@ -216,6 +228,8 @@ async def _run_review_pipeline(
     from app.models.database import get_session_factory
 
     factory = get_session_factory()
+    # Created before the try so the error handler can always report status.
+    github = GitHubProvider()
 
     async with factory() as db:
         try:
@@ -230,7 +244,6 @@ async def _run_review_pipeline(
             logger.info(f"Starting review pipeline for {repo_full_name}#{pr_number}")
 
             # Step 1: Fetch PR files from GitHub
-            github = GitHubProvider()
             pr_files = await github.get_pr_files(
                 repo_full_name, pr_number, installation_id
             )
@@ -247,9 +260,8 @@ async def _run_review_pipeline(
             )
 
             # Store raw diff for future fine-tuning
-            raw_diff = "\n".join(
-                f.patch for f in pipeline.diff_parser.parse_pr_files(pr_files) if f.patch
-            )
+            parsed_files = pipeline.diff_parser.parse_pr_files(pr_files)
+            raw_diff = "\n".join(f.patch for f in parsed_files if f.patch)
             pr_record.diff_text = raw_diff
 
             all_findings = result.findings
@@ -261,6 +273,14 @@ async def _run_review_pipeline(
                 pr_record.status = PRStatus.COMPLETED.value
                 pr_record.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                # Resolve the "pending" status set when the webhook arrived.
+                await github.set_commit_status(
+                    repo_full_name=repo_full_name,
+                    sha=head_sha,
+                    state="success",
+                    description="No reviewable changes",
+                    installation_id=installation_id,
+                )
                 return
 
             logger.info(f"AI analysis complete: {len(all_findings)} findings")
@@ -308,7 +328,7 @@ async def _run_review_pipeline(
 
             # Step 6: Publish review to GitHub
             publisher = ReviewPublisher(github)
-            comment_ids, summary_id = await publisher.publish_review(
+            await publisher.publish_review(
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
                 commit_sha=head_sha,
@@ -318,6 +338,7 @@ async def _run_review_pipeline(
                 files_reviewed=result.files_reviewed,
                 installation_id=installation_id,
                 pr_description=result.pr_description,
+                commentable_lines=pipeline.diff_parser.commentable_lines(parsed_files),
             )
 
             # Mark PR as completed
@@ -354,19 +375,29 @@ async def _run_review_pipeline(
                 f"Review pipeline failed for {repo_full_name}#{pr_number}: {e}",
                 exc_info=True,
             )
-            # Set error status on GitHub
+            if isinstance(e, ReviewIncompleteError):
+                description = "Review incomplete — AI provider error, not all code was reviewed"
+            else:
+                description = "Review failed — check server logs"
+            # Report the failure on the commit. Never leave it pending or green.
             try:
                 await github.set_commit_status(
                     repo_full_name=repo_full_name,
                     sha=head_sha,
                     state="error",
-                    description="Review failed — check server logs",
+                    description=description,
                     installation_id=installation_id,
                 )
-            except Exception:
-                pass
+            except Exception as status_err:
+                logger.error(f"Could not set error status for {repo_full_name}#{pr_number}: {status_err}")
             try:
-                pr_record.status = PRStatus.FAILED.value
-                await db.commit()
-            except Exception:
-                pass
+                await db.rollback()
+                result = await db.execute(
+                    select(PullRequest).where(PullRequest.id == pr_record_id)
+                )
+                failed_pr = result.scalar_one_or_none()
+                if failed_pr is not None:
+                    failed_pr.status = PRStatus.FAILED.value
+                    await db.commit()
+            except Exception as db_err:
+                logger.error(f"Could not mark PR {pr_record_id} as failed: {db_err}")

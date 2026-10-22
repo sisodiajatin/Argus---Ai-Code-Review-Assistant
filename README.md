@@ -92,8 +92,7 @@ python -m venv venv
 source venv/bin/activate   # Linux/Mac
 # or: venv\Scripts\activate  # Windows
 
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[dev]"     # CLI + server + test tools
 
 # Set up your API key
 argus config init
@@ -116,19 +115,32 @@ argus review --format json
 
 # Override model
 argus review --model gpt-4
+
+# Skip files (repeatable or comma-separated; adds to .argus.yaml `ignore`)
+argus review --ignore "docs/*,*.min.js"
 ```
+
+**Exit codes** (useful in CI): `0` no critical findings · `1` critical findings ·
+`2` the review could not be completed (e.g. invalid API key or provider outage).
+A failed review never prints as a clean one.
 
 ### Run the Dashboard Server
 
 ```bash
-# Start the server
-uvicorn app.main:app --reload --port 8000
+# Local, single-user dashboard (no login)
+DASHBOARD_AUTH_REQUIRED=false uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # Or with Docker
 docker-compose up -d
 ```
 
 Open `http://localhost:8000` to see the dashboard.
+
+> **Login is required by default.** Any deployment reachable by others needs GitHub OAuth
+> (`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`) and an allowlist of GitHub usernames
+> (`DASHBOARD_ALLOWED_USERS`). Signing in with GitHub alone does not grant access, because
+> review findings quote code from your repositories. Only set
+> `DASHBOARD_AUTH_REQUIRED=false` for a dashboard bound to localhost.
 
 ---
 
@@ -146,11 +158,14 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # needed to post the review comment
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: sisodiajatin/argus@main
+      - uses: sisodiajatin/Argus---Ai-Code-Review-Assistant@main
         with:
           ai_api_key: ${{ secrets.AI_API_KEY }}
 ```
@@ -164,6 +179,12 @@ jobs:
 | `ai_base_url` | `https://api.groq.com/openai/v1` | Base URL |
 | `base_branch` | (auto-detected) | Branch to compare against |
 | `ignore_paths` | `""` | Comma-separated glob patterns |
+| `fail_on_critical` | `true` | Fail the job when critical findings are reported |
+
+The job also fails if the review itself can't complete (for example, an invalid API key),
+so an AI provider outage is never mistaken for a clean review.
+
+**Outputs:** `critical_count`, `total_findings`.
 
 ---
 
@@ -218,9 +239,20 @@ GITHUB_WEBHOOK_SECRET=your_webhook_secret
 AI_API_KEY=your_api_key
 AI_MODEL=llama-3.3-70b-versatile
 AI_BASE_URL=https://api.groq.com/openai/v1
+
+PUBLIC_URL=https://your-domain.com
+SESSION_SECRET=<python -c "import secrets; print(secrets.token_hex(32))">
+
+# Dashboard login (OAuth App callback: https://your-domain.com/auth/github/callback)
+GITHUB_CLIENT_ID=your_oauth_client_id
+GITHUB_CLIENT_SECRET=your_oauth_client_secret
+DASHBOARD_ALLOWED_USERS=your-github-username
 ```
 
 4. Start the server and set the webhook URL to `https://your-domain.com/api/webhooks/github`
+
+The server refuses to start without `AI_API_KEY`. If the AI provider fails during a review,
+the commit status is set to **error** ("Review incomplete"), never to success.
 
 ---
 
@@ -320,7 +352,12 @@ argus/
 ## Running Tests
 
 ```bash
-# All tests
+pip install -e ".[dev]"
+
+# Lint
+ruff check .
+
+# All tests (no .env, network or dashboard build needed)
 pytest tests/ -v
 
 # Specific test file
@@ -343,6 +380,8 @@ pytest tests/ -v --cov=app --cov=cli
 
 ### Dashboard API
 
+All dashboard endpoints require a logged-in, allowlisted user (HTTP 401 otherwise).
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/dashboard/stats` | Overview metrics |
@@ -351,6 +390,9 @@ pytest tests/ -v --cov=app --cov=cli
 | `GET` | `/api/dashboard/reviews/{pr_id}` | Review detail with findings |
 | `GET` | `/api/dashboard/analytics/trends` | Time-series analytics |
 | `GET` | `/api/dashboard/analytics/categories` | Category breakdown |
+| `GET` | `/api/dashboard/analytics/severity` | Severity breakdown |
+| `GET` | `/api/dashboard/analytics/feedback` | Feedback stats |
+| `POST` | `/api/dashboard/findings/{id}/feedback` | Mark a finding helpful / not helpful |
 | `GET` | `/api/dashboard/settings` | Current settings (safe) |
 | `POST` | `/api/dashboard/reviews/{id}/re-review` | Trigger re-review |
 
@@ -360,7 +402,8 @@ pytest tests/ -v --cov=app --cov=cli
 |--------|------|-------------|
 | `GET` | `/auth/github/login` | Start GitHub OAuth |
 | `GET` | `/auth/github/callback` | OAuth callback |
-| `POST` | `/auth/logout` | Clear session |
+| `GET` | `/auth/logout` | Clear session |
+| `GET` | `/auth/me` | Current user and whether login is required |
 
 ---
 

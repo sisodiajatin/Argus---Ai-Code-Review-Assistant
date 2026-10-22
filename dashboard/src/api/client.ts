@@ -1,7 +1,22 @@
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 
+export class UnauthorizedError extends Error {
+  constructor() {
+    super('Login required')
+    this.name = 'UnauthorizedError'
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, options)
+  // credentials: 'include' sends the session cookie even when the API is on
+  // another origin (e.g. dashboard on Vercel, API on Render).
+  const res = await fetch(`${BASE_URL}${path}`, { credentials: 'include', ...options })
+  if (res.status === 401) {
+    if (window.location.pathname !== '/login') {
+      window.location.assign('/login')
+    }
+    throw new UnauthorizedError()
+  }
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`)
   return res.json()
 }
@@ -51,7 +66,12 @@ export const api = {
     request<import('../types').HealthResponse>('/api/health'),
 
   getMe: () =>
-    request<{ authenticated: boolean; user: { id: number; username: string; avatar_url: string } | null }>('/auth/me'),
+    request<{
+      authenticated: boolean
+      user: { id: number; username: string; avatar_url: string } | null
+      auth_required: boolean
+      oauth_configured: boolean
+    }>('/auth/me'),
 
   submitFeedback: (findingId: number, feedback: 'helpful' | 'not_helpful', note?: string) =>
     request<import('../types').FeedbackResponse>(

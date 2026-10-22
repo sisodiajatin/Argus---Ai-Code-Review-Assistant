@@ -1,8 +1,6 @@
 """Tests for the .argus.yaml config file loader."""
 
-import pytest
-from pathlib import Path
-from cli.config_file import _parse_yaml, load_repo_config, create_starter_config, RepoConfig
+from cli.config_file import _parse_yaml, load_repo_config, create_starter_config
 
 
 class TestParseYaml:

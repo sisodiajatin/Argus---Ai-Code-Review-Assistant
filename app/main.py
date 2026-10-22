@@ -8,12 +8,11 @@ All non-API routes fall through to index.html for client-side routing.
 """
 
 import logging
-import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,10 +20,12 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.webhooks import router as webhooks_router
 from app.api.health import router as health_router
-from app.api.auth import router as auth_router
+from app.api.auth import require_user, router as auth_router
 from app.api.dashboard import router as dashboard_router
-from app.config import get_settings
+from app import __version__
+from app.config import ensure_sqlite_dir, get_settings
 from app.models.database import init_db, close_db
+from app.services.background import shutdown_background_tasks
 
 # Path to the React build output
 REACT_BUILD_DIR = Path(__file__).resolve().parent.parent / "dashboard" / "dist"
@@ -52,7 +53,25 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
     logger.info("Starting Argus — The All-Seeing Code Reviewer...")
 
+    settings = get_settings()
+    # Fail fast: without an AI key every review would fail at runtime.
+    if not settings.ai_api_key:
+        raise RuntimeError(
+            "AI_API_KEY is not set. Argus cannot review pull requests without it."
+        )
+    if not settings.session_secret:
+        logger.warning(
+            "SESSION_SECRET is not set; deriving the session key from the webhook secret. "
+            "Set SESSION_SECRET explicitly in production."
+        )
+    if settings.dashboard_auth_required and not settings.dashboard_allowed_user_set:
+        logger.warning(
+            "DASHBOARD_ALLOWED_USERS is empty: nobody can log in to the dashboard. "
+            "Set it to a comma-separated list of GitHub usernames."
+        )
+
     # Initialize database
+    ensure_sqlite_dir(settings.database_url)
     await init_db()
     logger.info("Database initialized")
 
@@ -61,13 +80,29 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Argus...")
+    await shutdown_background_tasks()
     await close_db()
     logger.info("Shutdown complete")
 
 
-def create_app() -> FastAPI:
+def _resolve_spa_file(build_dir: Path, full_path: str) -> Path:
+    """Map a request path to a file inside build_dir, falling back to index.html.
+
+    Paths that resolve outside build_dir (e.g. encoded ``../`` sequences) never
+    reach the filesystem: they get index.html like any unknown client route.
+    """
+    root = build_dir.resolve()
+    if full_path:
+        candidate = (root / full_path).resolve()
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return candidate
+    return root / "index.html"
+
+
+def create_app(build_dir: Path | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
+    spa_dir = build_dir or REACT_BUILD_DIR
 
     app = FastAPI(
         title="Argus — The All-Seeing Code Reviewer",
@@ -76,7 +111,7 @@ def create_app() -> FastAPI:
             "to provide intelligent review suggestions including bug detection, "
             "security analysis, and architectural improvements."
         ),
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -84,46 +119,58 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            "http://localhost:5173",
-            "http://localhost:4173",
-            "http://localhost:3000",
-            os.getenv("FRONTEND_URL", ""),
+            origin
+            for origin in (
+                "http://localhost:5173",
+                "http://localhost:4173",
+                "http://localhost:3000",
+                settings.frontend_url,
+            )
+            if origin
         ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Session middleware for OAuth (uses webhook secret as signing key)
+    # Session middleware for OAuth — signed with its own key, not the webhook secret.
+    # A dashboard hosted on another site (FRONTEND_URL over https) needs
+    # SameSite=None; Secure cookies, otherwise browsers won't send them.
+    cross_site = settings.frontend_url.startswith("https://")
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.github_webhook_secret,
+        secret_key=settings.effective_session_secret,
+        same_site="none" if cross_site else "lax",
+        https_only=cross_site or settings.public_url.startswith("https://"),
+        max_age=7 * 24 * 3600,
     )
 
     # API routers
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(webhooks_router, prefix="/api", tags=["webhooks"])
-    app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
+    app.include_router(
+        dashboard_router,
+        prefix="/api",
+        tags=["dashboard"],
+        dependencies=[Depends(require_user)],
+    )
 
     # Auth router (no /api prefix — used by OAuth redirects)
     app.include_router(auth_router, tags=["auth"])
 
     # Serve React SPA from dashboard/dist/ if the build exists
-    if REACT_BUILD_DIR.is_dir():
+    if spa_dir.is_dir():
         # Mount static assets (JS, CSS, images) under /assets
-        assets_dir = REACT_BUILD_DIR / "assets"
+        assets_dir = spa_dir / "assets"
         if assets_dir.is_dir():
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
         # Catch-all: serve index.html for any non-API route (SPA client-side routing)
         @app.get("/{full_path:path}")
         async def serve_spa(request: Request, full_path: str):
-            # Serve actual files from dist/ if they exist (favicon, etc.)
-            file_path = REACT_BUILD_DIR / full_path
-            if full_path and file_path.is_file():
-                return FileResponse(str(file_path))
-            # Otherwise serve index.html for client-side routing
-            return FileResponse(str(REACT_BUILD_DIR / "index.html"))
+            # Real files inside dist/ (favicon, etc.) are served directly;
+            # anything else gets index.html for client-side routing.
+            return FileResponse(str(_resolve_spa_file(spa_dir, full_path)))
 
     return app
 
