@@ -15,7 +15,7 @@ import sys
 
 import click
 
-from app.config import CLISettings, get_cli_settings
+from app.config import get_cli_settings
 from app.services.vcs.local_git import LocalGitProvider
 from app.services.analyzer import ReviewIncompleteError
 from app.services.review_pipeline import ReviewPipeline, ReviewResult

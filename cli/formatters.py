@@ -5,10 +5,8 @@ Supports Rich (colored terminal), JSON, and plain text output.
 
 import io
 import json
-import re
 import sys
 
-from app.models.schemas import AIFinding
 from app.services.review_pipeline import ReviewResult
 
 

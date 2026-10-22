@@ -60,11 +60,11 @@ def main():
     if critical > 0:
         parts.append(f"**Status:** 🔴 **{critical} critical issue{'s' if critical != 1 else ''} found**")
     elif warnings > 0:
-        parts.append(f"**Status:** 🟡 **Minor issues found**")
+        parts.append("**Status:** 🟡 **Minor issues found**")
     elif findings:
-        parts.append(f"**Status:** 🟢 **Suggestions only — looking good!**")
+        parts.append("**Status:** 🟢 **Suggestions only — looking good!**")
     else:
-        parts.append(f"**Status:** ✅ **No issues found — great job!**")
+        parts.append("**Status:** ✅ **No issues found — great job!**")
 
     parts.append("")
 
@@ -80,7 +80,6 @@ def main():
         parts.append("")
 
     # Top findings
-    severity_map = {"🔴": "critical", "🟡": "warning", "🟢": "suggestion"}
     emoji_map = {"critical": "🔴", "warning": "🟡", "suggestion": "🟢"}
     top = [f for f in findings if f.get("severity") in ("critical", "warning")][:5]
     if top:

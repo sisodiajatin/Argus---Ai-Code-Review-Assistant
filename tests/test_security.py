@@ -68,7 +68,7 @@ class TestSPAPathTraversal:
 
 # ─── Dashboard authentication ───
 
-from unittest.mock import MagicMock, patch  # noqa: E402
+from unittest.mock import patch  # noqa: E402
 
 from app.main import app  # noqa: E402
 

@@ -5,15 +5,14 @@
 4. Finding feedback (model + API)
 """
 
-import json
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.models.schemas import AIFinding, ReviewChunk, FileChange
+from app.models.schemas import AIFinding
 from app.services.analyzer import AIAnalyzer, ChunkAnalysisError
 from app.services.publisher import ReviewPublisher
-from app.services.review_pipeline import ReviewPipeline, ReviewResult, SEVERITY_RANK
+from app.services.review_pipeline import ReviewPipeline, SEVERITY_RANK
 from cli.config_file import _parse_yaml
 
 

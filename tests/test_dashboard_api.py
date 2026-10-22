@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, create_app
-from app.models.database import init_db, close_db, get_engine
 
 
 @pytest.fixture

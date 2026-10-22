@@ -253,8 +253,6 @@ class SmartChunker:
         assigned: set[str] = set()
 
         # First pass: pair source files with their tests
-        file_map = {f.file_path: f for f in files}
-
         for file in files:
             if file.file_path in assigned:
                 continue

@@ -1,6 +1,5 @@
 """Tests for language-specific prompt hints."""
 
-import pytest
 
 from app.prompts.languages import get_language_hints, LANGUAGE_HINTS
 

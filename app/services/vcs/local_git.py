@@ -7,7 +7,6 @@ branch diff, and committed change types.
 
 import logging
 import subprocess
-from pathlib import Path
 
 from app.services.vcs.base import PRFile
 

@@ -14,7 +14,7 @@ from typing import Any
 import openai
 
 from app.config import BaseAppSettings, get_base_settings
-from app.models.schemas import AIFinding, AIReviewResult, FileChange, ReviewChunk
+from app.models.schemas import AIFinding, AIReviewResult, ReviewChunk
 from app.prompts.system import SYSTEM_PROMPT
 from app.prompts.review import build_review_prompt, build_summary_prompt, build_pr_summary_prompt
 from app.prompts.languages import get_language_hints

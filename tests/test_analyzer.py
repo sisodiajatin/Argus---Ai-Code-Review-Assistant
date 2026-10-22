@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from app.services.analyzer import AIAnalyzer
 
