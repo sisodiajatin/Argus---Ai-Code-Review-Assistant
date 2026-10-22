@@ -146,11 +146,14 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # needed to post the review comment
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: sisodiajatin/argus@main
+      - uses: sisodiajatin/Argus---Ai-Code-Review-Assistant@main
         with:
           ai_api_key: ${{ secrets.AI_API_KEY }}
 ```
@@ -164,6 +167,12 @@ jobs:
 | `ai_base_url` | `https://api.groq.com/openai/v1` | Base URL |
 | `base_branch` | (auto-detected) | Branch to compare against |
 | `ignore_paths` | `""` | Comma-separated glob patterns |
+| `fail_on_critical` | `true` | Fail the job when critical findings are reported |
+
+The job also fails if the review itself can't complete (for example, an invalid API key),
+so an AI provider outage is never mistaken for a clean review.
+
+**Outputs:** `critical_count`, `total_findings`.
 
 ---
 

@@ -17,17 +17,29 @@ inputs:
     required: false
     default: "https://api.groq.com/openai/v1"
   base_branch:
-    description: "Base branch to compare against"
+    description: "Base branch to compare against (default: the PR's base branch)"
     required: false
     default: ""
   ignore_paths:
     description: "Comma-separated glob patterns to ignore"
     required: false
     default: ""
+  fail_on_critical:
+    description: "Fail the job when critical findings are reported (true/false)"
+    required: false
+    default: "true"
   python_version:
     description: "Python version to use"
     required: false
     default: "3.12"
+
+outputs:
+  critical_count:
+    description: "Number of critical findings"
+    value: ${{ steps.review.outputs.critical_count }}
+  total_findings:
+    description: "Total number of findings"
+    value: ${{ steps.review.outputs.total_findings }}
 
 runs:
   using: "composite"
@@ -39,40 +51,77 @@ runs:
 
     - name: Install Argus
       shell: bash
-      run: |
-        pip install -q git+https://github.com/${{ github.repository }}.git || \
-        pip install -q -e ${{ github.action_path }}
+      # Install Argus from this action's own checkout — never from the
+      # repository being reviewed.
+      run: pip install -q "$GITHUB_ACTION_PATH"
 
     - name: Run Argus Review
+      id: review
       shell: bash
+      # Inputs and event fields go through env vars, never ${{ }} inside the
+      # script, so they can't inject shell commands.
       env:
         AI_API_KEY: ${{ inputs.ai_api_key }}
         AI_MODEL: ${{ inputs.ai_model }}
         AI_BASE_URL: ${{ inputs.ai_base_url }}
-        GITHUB_TOKEN: ${{ github.token }}
+        INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
+        INPUT_IGNORE_PATHS: ${{ inputs.ignore_paths }}
+        PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        RESULTS_FILE: ${{ runner.temp }}/argus-results.json
       run: |
-        # Determine base branch
-        BASE="${{ inputs.base_branch }}"
-        if [ -z "$BASE" ]; then
-          BASE="${{ github.event.pull_request.base.ref }}"
-        fi
-        if [ -z "$BASE" ]; then
-          BASE="main"
+        set -euo pipefail
+
+        BASE="${INPUT_BASE_BRANCH:-${PR_BASE_REF:-main}}"
+
+        # Make sure the base branch exists locally for the merge-base diff.
+        # Full history (actions/checkout fetch-depth: 0) is recommended.
+        if ! git fetch --no-tags origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}"; then
+          echo "::warning::Could not fetch base branch '${BASE}'"
         fi
 
-        # Fetch base branch for diff
-        git fetch origin "$BASE" --depth=1 2>/dev/null || true
+        ARGS=(review --base "origin/${BASE}" --format json)
+        if [ -n "${INPUT_IGNORE_PATHS}" ]; then
+          ARGS+=(--ignore "${INPUT_IGNORE_PATHS}")
+        fi
 
-        # Run review
-        argus review --base "$BASE" --type committed --format json > /tmp/argus-results.json 2>/dev/null || true
+        # Exit codes: 0 = ok, 1 = critical findings, 2 = review failed.
+        set +e
+        argus "${ARGS[@]}" > "$RESULTS_FILE"
+        STATUS=$?
+        set -e
+
+        if [ "$STATUS" -eq 2 ]; then
+          echo "::error::Argus could not complete the review (AI provider error). See the log above."
+          exit 2
+        fi
+        if [ "$STATUS" -gt 2 ]; then
+          echo "::error::Argus exited unexpectedly with code ${STATUS}"
+          exit "$STATUS"
+        fi
+
+        python3 - "$RESULTS_FILE" >> "$GITHUB_OUTPUT" <<'PY'
+        import json, sys
+        data = json.load(open(sys.argv[1]))
+        findings = data.get("findings", [])
+        print(f"critical_count={sum(1 for f in findings if f.get('severity') == 'critical')}")
+        print(f"total_findings={len(findings)}")
+        PY
 
     - name: Post PR Comment
-      if: github.event_name == 'pull_request'
+      if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        RESULTS_FILE: ${{ runner.temp }}/argus-results.json
+      run: python3 "$GITHUB_ACTION_PATH/action_post_comment.py" "$REPO" "$PR_NUMBER" "$RESULTS_FILE"
+
+    - name: Fail on critical findings
+      if: inputs.fail_on_critical == 'true' && steps.review.outputs.critical_count != '0'
+      shell: bash
+      env:
+        CRITICAL: ${{ steps.review.outputs.critical_count }}
       run: |
-        python3 "${{ github.action_path }}/action_post_comment.py" \
-          "${{ github.repository }}" \
-          "${{ github.event.pull_request.number }}" \
-          /tmp/argus-results.json
+        echo "::error::Argus found ${CRITICAL} critical issue(s)."
+        exit 1
