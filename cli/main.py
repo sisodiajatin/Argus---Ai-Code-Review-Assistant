@@ -15,6 +15,7 @@ import sys
 
 import click
 
+from app import __version__
 from app.config import get_cli_settings
 from app.services.vcs.local_git import LocalGitProvider
 from app.services.analyzer import ReviewIncompleteError
@@ -27,7 +28,7 @@ EXIT_REVIEW_FAILED = 2
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="0.1.0", prog_name="argus")
+@click.version_option(version=__version__, prog_name="argus")
 @click.pass_context
 def cli(ctx):
     """Argus — The All-Seeing Code Reviewer."""

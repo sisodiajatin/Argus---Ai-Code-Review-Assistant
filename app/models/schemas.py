@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
+from app import __version__
+
 
 # --- Webhook Schemas ---
 
@@ -80,7 +82,7 @@ class AIReviewResult(BaseModel):
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str = __version__
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

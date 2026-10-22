@@ -4,6 +4,8 @@ import json
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+
+from app import __version__
 from click.testing import CliRunner
 
 from cli.main import cli
@@ -58,7 +60,7 @@ class TestCLIVersion:
     def test_version_flag(self, runner):
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
+        assert __version__ in result.output
 
 
 class TestCLIHelp:

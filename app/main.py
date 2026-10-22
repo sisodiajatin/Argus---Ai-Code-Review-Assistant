@@ -22,6 +22,7 @@ from app.api.webhooks import router as webhooks_router
 from app.api.health import router as health_router
 from app.api.auth import require_user, router as auth_router
 from app.api.dashboard import router as dashboard_router
+from app import __version__
 from app.config import ensure_sqlite_dir, get_settings
 from app.models.database import init_db, close_db
 from app.services.background import shutdown_background_tasks
@@ -110,7 +111,7 @@ def create_app(build_dir: Path | None = None) -> FastAPI:
             "to provide intelligent review suggestions including bug detection, "
             "security analysis, and architectural improvements."
         ),
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
