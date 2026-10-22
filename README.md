@@ -16,10 +16,6 @@ AI-powered code review that works everywhere — as a **GitHub webhook**, a **CL
   ▶ <a href="docs/media/argus-launch.mp4">Watch the full launch video with sound</a>
 </p>
 
-<p align="center">
-  <img src="assets/argus-tui.png" alt="Argus TUI" width="700">
-</p>
-
 ---
 
 ## Features
