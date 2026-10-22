@@ -17,8 +17,13 @@ import click
 
 from app.config import CLISettings, get_cli_settings
 from app.services.vcs.local_git import LocalGitProvider
-from app.services.review_pipeline import ReviewPipeline
+from app.services.analyzer import ReviewIncompleteError
+from app.services.review_pipeline import ReviewPipeline, ReviewResult
 from cli.formatters import get_formatter
+
+# Exit codes for `argus review`
+EXIT_CRITICAL_FINDINGS = 1
+EXIT_REVIEW_FAILED = 2
 
 
 @click.group(invoke_without_command=True)
@@ -64,12 +69,58 @@ def cli(ctx):
     is_flag=True,
     help="Show verbose output.",
 )
-def review(base, change_type, output_format, model, path, verbose):
-    """Review code changes using AI."""
-    asyncio.run(_run_review(base, change_type, output_format, model, path, verbose))
+@click.option(
+    "--ignore", "-i", "ignore_patterns",
+    multiple=True,
+    help="Glob pattern to skip (repeatable, or comma-separated). Adds to .argus.yaml 'ignore'.",
+)
+def review(base, change_type, output_format, model, path, verbose, ignore_patterns):
+    """Review code changes using AI.
+
+    Exit codes: 0 = no critical findings, 1 = critical findings,
+    2 = the review could not be completed (e.g. the AI provider failed).
+    """
+    asyncio.run(
+        _run_review(base, change_type, output_format, model, path, verbose, ignore_patterns)
+    )
 
 
-async def _run_review(base, change_type, output_format, model, path, verbose):
+def _merge_ignore_patterns(config_patterns: list[str], cli_patterns: tuple[str, ...]) -> list[str]:
+    """Combine .argus.yaml ignores with --ignore flags (which may be comma-separated)."""
+    merged: list[str] = []
+    for raw in [*config_patterns, *cli_patterns]:
+        for pattern in str(raw).split(","):
+            pattern = pattern.strip()
+            if pattern and pattern not in merged:
+                merged.append(pattern)
+    return merged
+
+
+async def _run_pipeline_or_exit(settings, pr_files, title, author, base_branch, ignored_paths):
+    """Run the review pipeline; exit with EXIT_REVIEW_FAILED if it can't finish.
+
+    A failed review must never print as a clean one, so no results are output.
+    """
+    try:
+        pipeline = ReviewPipeline(settings=settings)
+        return await pipeline.run(
+            pr_files=pr_files,
+            title=title,
+            author=author,
+            base_branch=base_branch,
+            ignored_paths=ignored_paths,
+        )
+    except ReviewIncompleteError as e:
+        click.echo(f"Error: review failed — {e}", err=True)
+        click.echo(
+            "No results were produced. Check AI_API_KEY, AI_BASE_URL and AI_MODEL "
+            "('argus config show').",
+            err=True,
+        )
+        sys.exit(EXIT_REVIEW_FAILED)
+
+
+async def _run_review(base, change_type, output_format, model, path, verbose, ignore_patterns=()):
     """Async implementation of the review command."""
     from cli.config_file import load_repo_config
 
@@ -103,16 +154,20 @@ async def _run_review(base, change_type, output_format, model, path, verbose):
         click.echo("Run 'argus config init' to set up your API key.", err=True)
         sys.exit(1)
 
+    ignored_paths = _merge_ignore_patterns(repo_config.ignore, ignore_patterns)
+
     # Determine if TUI mode (default when no --format is specified and stdout is a terminal)
     use_tui = output_format is None and sys.stdout.isatty()
 
     if use_tui:
-        await _run_tui_review(settings, base, change_type, model, path, verbose)
+        await _run_tui_review(settings, base, change_type, model, path, verbose, ignored_paths)
     else:
-        await _run_plain_review(settings, base, change_type, output_format, model, path, verbose)
+        await _run_plain_review(
+            settings, base, change_type, output_format, model, path, verbose, ignored_paths
+        )
 
 
-async def _run_tui_review(settings, base, change_type, model, path, verbose):
+async def _run_tui_review(settings, base, change_type, model, path, verbose, ignored_paths=None):
     """Run review with the interactive TUI."""
     from cli.tui import ArgusTUI
 
@@ -169,20 +224,17 @@ async def _run_tui_review(settings, base, change_type, model, path, verbose):
 
     # Run the review with progress animation
     with tui.show_reviewing():
-        pipeline = ReviewPipeline(settings=settings)
-        result = await pipeline.run(
-            pr_files=pr_files,
-            title=title,
-            author=repo_info["author"],
-            base_branch=base or "main",
+        result = await _run_pipeline_or_exit(
+            settings, pr_files, title, repo_info["author"], base or "main", ignored_paths
         )
 
     # Save results to dashboard database
     try:
         from cli.db_sync import save_review_to_db
         await save_review_to_db(result, repo_info, title, change_type or "all")
-    except Exception:
-        pass  # Don't fail the CLI if DB save fails
+    except Exception as e:  # Don't fail the CLI if DB save fails
+        if verbose:
+            click.echo(f"Warning: could not save results to dashboard DB: {e}", err=True)
 
     # Show results
     tui.show_results(result, verbose=verbose)
@@ -190,10 +242,12 @@ async def _run_tui_review(settings, base, change_type, model, path, verbose):
     # Exit with non-zero if critical findings
     critical = sum(1 for f in result.findings if f.severity == "critical")
     if critical > 0:
-        sys.exit(1)
+        sys.exit(EXIT_CRITICAL_FINDINGS)
 
 
-async def _run_plain_review(settings, base, change_type, output_format, model, path, verbose):
+async def _run_plain_review(
+    settings, base, change_type, output_format, model, path, verbose, ignored_paths=None
+):
     """Run review with traditional formatter output (no TUI)."""
     # Get the formatter
     fmt = output_format or settings.output_format
@@ -208,13 +262,13 @@ async def _run_plain_review(settings, base, change_type, output_format, model, p
 
     repo_info = git.get_repo_info()
     if verbose:
-        click.echo(f"Repository: {repo_info['remote']}")
-        click.echo(f"Branch: {repo_info['branch']}")
-        click.echo(f"Author: {repo_info['author']}")
+        click.echo(f"Repository: {repo_info['remote']}", err=True)
+        click.echo(f"Branch: {repo_info['branch']}", err=True)
+        click.echo(f"Author: {repo_info['author']}", err=True)
 
     # Get changes
     if verbose:
-        click.echo("Fetching changes...")
+        click.echo("Fetching changes...", err=True)
 
     if base:
         pr_files = git.get_branch_diff(base)
@@ -230,33 +284,29 @@ async def _run_plain_review(settings, base, change_type, output_format, model, p
         title = f"Uncommitted changes on {repo_info['branch']}"
 
     if not pr_files:
-        click.echo("No changes found to review.")
+        if fmt == "json":
+            # Keep stdout machine-readable for CI consumers.
+            formatter.print_review(ReviewResult(summary="No changes found to review."))
+        else:
+            click.echo("No changes found to review.")
         sys.exit(0)
 
     if verbose:
-        click.echo(f"Found {len(pr_files)} changed file(s)")
+        click.echo(f"Found {len(pr_files)} changed file(s)", err=True)
 
     # Run review
     if fmt == "rich":
         from rich.console import Console
         console = Console()
         with console.status("[bold blue]Analyzing code with AI...[/bold blue]"):
-            pipeline = ReviewPipeline(settings=settings)
-            result = await pipeline.run(
-                pr_files=pr_files,
-                title=title,
-                author=repo_info["author"],
-                base_branch=base or "main",
+            result = await _run_pipeline_or_exit(
+                settings, pr_files, title, repo_info["author"], base or "main", ignored_paths
             )
     else:
         if verbose:
-            click.echo("Analyzing code with AI...")
-        pipeline = ReviewPipeline(settings=settings)
-        result = await pipeline.run(
-            pr_files=pr_files,
-            title=title,
-            author=repo_info["author"],
-            base_branch=base or "main",
+            click.echo("Analyzing code with AI...", err=True)
+        result = await _run_pipeline_or_exit(
+            settings, pr_files, title, repo_info["author"], base or "main", ignored_paths
         )
 
     # Save results to dashboard database
@@ -264,10 +314,10 @@ async def _run_plain_review(settings, base, change_type, output_format, model, p
         from cli.db_sync import save_review_to_db
         await save_review_to_db(result, repo_info, title, change_type or "all")
         if verbose:
-            click.echo("Results saved to dashboard database.")
-    except Exception:
+            click.echo("Results saved to dashboard database.", err=True)
+    except Exception as e:
         if verbose:
-            click.echo("Warning: Could not save results to dashboard DB.")
+            click.echo(f"Warning: Could not save results to dashboard DB: {e}", err=True)
 
     # Output results
     formatter.print_review(result, verbose=verbose)
@@ -275,7 +325,7 @@ async def _run_plain_review(settings, base, change_type, output_format, model, p
     # Exit with non-zero if critical findings
     critical = sum(1 for f in result.findings if f.severity == "critical")
     if critical > 0:
-        sys.exit(1)
+        sys.exit(EXIT_CRITICAL_FINDINGS)
 
 
 @cli.group()

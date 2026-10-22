@@ -22,6 +22,38 @@ from app.services.diff_parser import DiffParser
 
 logger = logging.getLogger(__name__)
 
+# Errors worth retrying: the request may succeed if sent again.
+TRANSIENT_ERRORS = (
+    openai.RateLimitError,
+    openai.APIConnectionError,  # includes APITimeoutError
+    openai.InternalServerError,
+)
+
+
+class ChunkAnalysisError(Exception):
+    """A chunk could not be analyzed (API failure or unreadable model output)."""
+
+    def __init__(self, chunk_id: str, cause: BaseException):
+        self.chunk_id = chunk_id
+        self.cause = cause
+        super().__init__(f"chunk {chunk_id}: {cause.__class__.__name__}: {cause}")
+
+
+class ReviewIncompleteError(Exception):
+    """Some chunks failed, so the review does not cover the whole diff.
+
+    Raised instead of returning partial results, so callers never report an
+    unreviewed change as clean.
+    """
+
+    def __init__(self, failed: int, total: int, errors: list[BaseException]):
+        self.failed = failed
+        self.total = total
+        self.errors = errors
+        first = errors[0] if errors else None
+        detail = f" First error: {first}" if first else ""
+        super().__init__(f"{failed} of {total} chunk(s) could not be analyzed.{detail}")
+
 
 class AIAnalyzer:
     """Analyzes code diffs using OpenAI's LLM and returns structured findings."""
@@ -43,7 +75,6 @@ class AIAnalyzer:
         pr_title: str,
         pr_author: str,
         base_branch: str = "main",
-        _retry_count: int = 0,
     ) -> AIReviewResult:
         """Analyze a single review chunk and return findings.
 
@@ -52,10 +83,13 @@ class AIAnalyzer:
             pr_title: The pull request title for context.
             pr_author: The PR author for context.
             base_branch: The target branch for context.
-            _retry_count: Internal retry counter (do not set manually).
 
         Returns:
             AIReviewResult with findings and metadata.
+
+        Raises:
+            ChunkAnalysisError: if the chunk could not be analyzed. An empty
+                findings list always means "reviewed, nothing found".
         """
         start_time = time.time()
 
@@ -81,75 +115,60 @@ class AIAnalyzer:
         if lang_hints:
             system_prompt += "\n\n" + lang_hints
 
-        # Call the LLM
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.settings.ai_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                max_tokens=4096,
-                response_format={"type": "json_object"},
-            )
-
-            # Parse the response
-            response_text = response.choices[0].message.content or "{}"
-            tokens_used = response.usage.total_tokens if response.usage else 0
-
-            findings = self._parse_findings(response_text)
-            summary = self._extract_summary(response_text)
-
-            elapsed_ms = (time.time() - start_time) * 1000
-            logger.info(
-                f"Analyzed chunk {chunk.chunk_id}: {len(findings)} findings, "
-                f"{tokens_used} tokens, {elapsed_ms:.0f}ms"
-            )
-
-            return AIReviewResult(
-                findings=findings,
-                summary=summary,
-                tokens_used=tokens_used,
-            )
-
-        except openai.RateLimitError:
-            if _retry_count >= self.MAX_RETRIES:
-                logger.error(
-                    f"Rate limit exceeded after {self.MAX_RETRIES} retries "
-                    f"for chunk {chunk.chunk_id}"
+        # Call the LLM, retrying only transient failures.
+        attempt = 0
+        while True:
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.settings.ai_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=4096,
+                    response_format={"type": "json_object"},
                 )
-                return AIReviewResult(
-                    findings=[],
-                    summary="Rate limit exceeded — could not analyze this chunk.",
-                    tokens_used=0,
+                break
+            except TRANSIENT_ERRORS as e:
+                if attempt >= self.MAX_RETRIES:
+                    raise ChunkAnalysisError(chunk.chunk_id, e) from e
+                delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                attempt += 1
+                logger.warning(
+                    f"{e.__class__.__name__} on chunk {chunk.chunk_id}, retrying in {delay}s "
+                    f"(attempt {attempt}/{self.MAX_RETRIES})"
                 )
-            delay = self.RETRY_BASE_DELAY * (2 ** _retry_count)
-            logger.warning(
-                f"Rate limit hit, retrying in {delay}s "
-                f"(attempt {_retry_count + 1}/{self.MAX_RETRIES})"
-            )
-            await asyncio.sleep(delay)
-            return await self.analyze_chunk(
-                chunk, pr_title, pr_author, base_branch,
-                _retry_count=_retry_count + 1,
+                await asyncio.sleep(delay)
+            except Exception as e:
+                # Auth errors, bad model names, bad requests: retrying won't help.
+                raise ChunkAnalysisError(chunk.chunk_id, e) from e
+
+        # Parse the response
+        response_text = response.choices[0].message.content or "{}"
+        tokens_used = response.usage.total_tokens if response.usage else 0
+
+        if not self._looks_like_findings_json(response_text):
+            # A reply we can't parse means the chunk was NOT reviewed — don't
+            # let it masquerade as "no findings".
+            raise ChunkAnalysisError(
+                chunk.chunk_id, ValueError("model response was not valid findings JSON")
             )
 
-        except openai.APIError as e:
-            logger.error(f"OpenAI API error analyzing chunk {chunk.chunk_id}: {e}")
-            return AIReviewResult(
-                findings=[],
-                summary=f"Error analyzing this chunk: {str(e)}",
-                tokens_used=0,
-            )
+        findings = self._parse_findings(response_text)
+        summary = self._extract_summary(response_text)
 
-        except Exception as e:
-            logger.error(f"Unexpected error analyzing chunk {chunk.chunk_id}: {e}")
-            return AIReviewResult(
-                findings=[],
-                summary=f"Unexpected error: {str(e)}",
-                tokens_used=0,
-            )
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.info(
+            f"Analyzed chunk {chunk.chunk_id}: {len(findings)} findings, "
+            f"{tokens_used} tokens, {elapsed_ms:.0f}ms"
+        )
+
+        return AIReviewResult(
+            findings=findings,
+            summary=summary,
+            tokens_used=tokens_used,
+        )
 
     async def analyze_pr(
         self,
@@ -185,21 +204,30 @@ class AIAnalyzer:
             return_exceptions=True,
         )
 
-        # Collect findings from all chunks
+        # Collect findings from all chunks. Any failed chunk means part of the
+        # diff went unreviewed, so the review as a whole is incomplete.
+        failures: list[BaseException] = []
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.error(f"Chunk analysis failed: {result}")
+                failures.append(result)
                 continue
             all_findings.extend(result.findings)
             total_tokens += result.tokens_used
 
+        if failures:
+            raise ReviewIncompleteError(failed=len(failures), total=len(chunks), errors=failures)
+
+        all_findings = self._dedupe_findings(all_findings)
+
         # Generate overall summary
-        summary_text = await self._generate_summary(
+        summary_text, summary_tokens = await self._generate_summary(
             all_findings=all_findings,
             pr_title=pr_title,
             pr_author=pr_author,
             chunks=chunks,
         )
+        total_tokens += summary_tokens
 
         processing_time_ms = (time.time() - start_time) * 1000
 
@@ -216,13 +244,17 @@ class AIAnalyzer:
         pr_title: str,
         pr_author: str,
         chunks: list[ReviewChunk],
-    ) -> str:
-        """Generate a summary review comment from all findings."""
+    ) -> tuple[str, int]:
+        """Generate a summary review comment from all findings.
+
+        Returns (summary_text, tokens_used).
+        """
         if not all_findings:
             return (
                 "## ✅ AI Code Review\n\n"
                 "No significant issues found in this pull request. "
-                "The code changes look good!"
+                "The code changes look good!",
+                0,
             )
 
         # Format findings for the summary prompt
@@ -265,10 +297,13 @@ class AIAnalyzer:
                 temperature=0.3,
                 max_tokens=2048,
             )
-            return response.choices[0].message.content or "Summary generation failed."
+            tokens = response.usage.total_tokens if response.usage else 0
+            text = response.choices[0].message.content or self._build_fallback_summary(all_findings)
+            return text, tokens
         except Exception as e:
+            # The findings themselves are intact; only the prose summary failed.
             logger.error(f"Failed to generate summary: {e}")
-            return self._build_fallback_summary(all_findings)
+            return self._build_fallback_summary(all_findings), 0
 
     def _format_chunk_for_llm(self, chunk: ReviewChunk) -> str:
         """Format a review chunk into a string suitable for LLM input."""
@@ -310,6 +345,27 @@ class AIAnalyzer:
                 continue
 
         return findings
+
+    def _looks_like_findings_json(self, response_text: str) -> bool:
+        """True if the reply is a JSON object (bare or fenced) we can read findings from."""
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError:
+            data = self._extract_json_from_text(response_text)
+        return isinstance(data, dict)
+
+    @staticmethod
+    def _dedupe_findings(findings: list[AIFinding]) -> list[AIFinding]:
+        """Drop exact repeats (same file, line and title) produced by overlapping chunks."""
+        seen: set[tuple] = set()
+        unique: list[AIFinding] = []
+        for f in findings:
+            key = (f.file_path, f.line_start, f.title.strip().lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(f)
+        return unique
 
     def _extract_summary(self, response_text: str) -> str:
         """Extract the summary field from the LLM response."""
@@ -383,6 +439,19 @@ class AIAnalyzer:
         pr_author: str,
         base_branch: str = "main",
     ) -> str:
+        """Generate a plain-English summary of what the PR does (text only)."""
+        text, _ = await self.generate_pr_summary_with_usage(
+            chunks, pr_title, pr_author, base_branch
+        )
+        return text
+
+    async def generate_pr_summary_with_usage(
+        self,
+        chunks: list[ReviewChunk],
+        pr_title: str,
+        pr_author: str,
+        base_branch: str = "main",
+    ) -> tuple[str, int]:
         """Generate a plain-English summary of what the PR does.
 
         This is NOT the review-findings summary — it describes the *purpose*
@@ -395,7 +464,7 @@ class AIAnalyzer:
             base_branch: Target branch.
 
         Returns:
-            Markdown-formatted PR summary string.
+            (markdown summary, tokens_used)
         """
         # Collect file list and abbreviated diffs
         file_paths: list[str] = []
@@ -451,11 +520,12 @@ class AIAnalyzer:
                 temperature=0.3,
                 max_tokens=1024,
             )
-            return response.choices[0].message.content or ""
+            tokens = response.usage.total_tokens if response.usage else 0
+            return response.choices[0].message.content or "", tokens
         except Exception as e:
             logger.error(f"Failed to generate PR summary: {e}")
             # Fallback: simple file-list summary
             return (
                 f"**Changes in {len(file_paths)} file(s):**\n"
                 + "\n".join(f"- `{p}`" for p in file_paths[:15])
-            )
+            ), 0
