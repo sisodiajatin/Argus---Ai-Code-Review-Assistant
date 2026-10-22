@@ -81,15 +81,44 @@ LANGUAGE_GROUPS = {
 }
 
 
+class _ApproxTokenizer:
+    """Fallback when tiktoken's encoding files can't be loaded (e.g. offline).
+
+    tiktoken downloads its BPE files on first use, so air-gapped CI runners
+    would otherwise crash. ~4 characters per token is a standard estimate
+    for code and English text; it only drives chunk sizing.
+    """
+
+    def encode(self, text: str) -> list[int]:
+        return [0] * ((len(text) + 3) // 4)
+
+
+_tokenizer_cache: dict[str, object] = {}
+
+
+def _load_tokenizer(model: str):
+    """Load (and cache) a tokenizer for a model, degrading gracefully."""
+    if model in _tokenizer_cache:
+        return _tokenizer_cache[model]
+    try:
+        try:
+            tokenizer = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Non-OpenAI model (Gemini, Llama, ...): cl100k is a close enough proxy.
+            tokenizer = tiktoken.get_encoding("cl100k_base")
+    except Exception as e:  # network or file errors while fetching BPE data
+        logger.warning(f"tiktoken unavailable ({e.__class__.__name__}); using approximate token counts")
+        tokenizer = _ApproxTokenizer()
+    _tokenizer_cache[model] = tokenizer
+    return tokenizer
+
+
 class SmartChunker:
     """Breaks large PRs into LLM-friendly chunks with smart prioritization."""
 
     def __init__(self, settings: BaseAppSettings | None = None):
         self.settings = settings or get_base_settings()
-        try:
-            self._tokenizer = tiktoken.encoding_for_model(self.settings.ai_model)
-        except KeyError:
-            self._tokenizer = tiktoken.get_encoding("cl100k_base")
+        self._tokenizer = _load_tokenizer(self.settings.ai_model)
 
     def count_tokens(self, text: str) -> int:
         """Count the number of tokens in a text string."""
