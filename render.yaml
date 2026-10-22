@@ -23,4 +23,14 @@ services:
         sync: false
       - key: GITHUB_PRIVATE_KEY
         sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DASHBOARD_ALLOWED_USERS
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
     healthCheckPath: /api/health

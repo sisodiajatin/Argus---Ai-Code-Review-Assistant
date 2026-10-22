@@ -1,7 +1,15 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { api } from '../api/client'
 
 export default function Login() {
   const apiUrl = import.meta.env.VITE_API_URL || ''
+  // Hide "continue without login" unless the server says login is optional.
+  const [authRequired, setAuthRequired] = useState(true)
+
+  useEffect(() => {
+    api.getMe().then((me) => setAuthRequired(me.auth_required)).catch(() => {})
+  }, [])
 
   return (
     <div className="min-h-screen bg-surface-0 flex items-center justify-center relative overflow-hidden">
@@ -41,14 +49,16 @@ export default function Login() {
           Sign in with GitHub
         </a>
 
-        <div className="mt-6">
-          <Link
-            to="/dashboard"
-            className="text-text-muted hover:text-text-secondary text-sm transition-colors"
-          >
-            Continue without login &rarr;
-          </Link>
-        </div>
+        {!authRequired && (
+          <div className="mt-6">
+            <Link
+              to="/dashboard"
+              className="text-text-muted hover:text-text-secondary text-sm transition-colors"
+            >
+              Continue without login &rarr;
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   )

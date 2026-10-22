@@ -12,7 +12,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.webhooks import router as webhooks_router
 from app.api.health import router as health_router
-from app.api.auth import router as auth_router
+from app.api.auth import require_user, router as auth_router
 from app.api.dashboard import router as dashboard_router
 from app.config import ensure_sqlite_dir, get_settings
 from app.models.database import init_db, close_db
@@ -62,6 +62,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "SESSION_SECRET is not set; deriving the session key from the webhook secret. "
             "Set SESSION_SECRET explicitly in production."
+        )
+    if settings.dashboard_auth_required and not settings.dashboard_allowed_user_set:
+        logger.warning(
+            "DASHBOARD_ALLOWED_USERS is empty: nobody can log in to the dashboard. "
+            "Set it to a comma-separated list of GitHub usernames."
         )
 
     # Initialize database
@@ -127,18 +132,27 @@ def create_app(build_dir: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Session middleware for OAuth — signed with its own key, not the webhook secret
+    # Session middleware for OAuth — signed with its own key, not the webhook secret.
+    # A dashboard hosted on another site (FRONTEND_URL over https) needs
+    # SameSite=None; Secure cookies, otherwise browsers won't send them.
+    cross_site = settings.frontend_url.startswith("https://")
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.effective_session_secret,
-        same_site="lax",
-        https_only=settings.public_url.startswith("https://"),
+        same_site="none" if cross_site else "lax",
+        https_only=cross_site or settings.public_url.startswith("https://"),
+        max_age=7 * 24 * 3600,
     )
 
     # API routers
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(webhooks_router, prefix="/api", tags=["webhooks"])
-    app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
+    app.include_router(
+        dashboard_router,
+        prefix="/api",
+        tags=["dashboard"],
+        dependencies=[Depends(require_user)],
+    )
 
     # Auth router (no /api prefix — used by OAuth redirects)
     app.include_router(auth_router, tags=["auth"])

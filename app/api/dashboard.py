@@ -1,6 +1,8 @@
-"""Dashboard REST API endpoints."""
+"""Dashboard REST API endpoints.
 
-import asyncio
+Every route here is guarded by require_user (see app.main).
+"""
+
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -23,13 +25,13 @@ from app.models.dashboard_schemas import (
     CategoryBreakdown,
     SeverityBreakdown,
     SettingsResponse,
-    IgnoredPathsUpdate,
     ReReviewResponse,
     FeedbackRequest,
     FeedbackResponse,
     FeedbackStats,
     FeedbackCategoryRate,
 )
+from app.services.background import spawn
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -225,7 +227,7 @@ async def re_review(pr_id: int, db: AsyncSession = Depends(get_db)):
     from app.api.webhooks import _run_review_pipeline
     settings = get_settings()
 
-    asyncio.create_task(
+    spawn(
         _run_review_pipeline(
             db_url=settings.database_url,
             repo_full_name=repo.full_name,
@@ -238,7 +240,8 @@ async def re_review(pr_id: int, db: AsyncSession = Depends(get_db)):
             head_sha=pr.head_sha or "",
             base_branch=pr.base_branch or "main",
             ignored_paths=repo.ignored_paths,
-        )
+        ),
+        name=f"re-review:{repo.full_name}#{pr.pr_number}",
     )
 
     return ReReviewResponse(status="processing", message="Re-review started")
@@ -253,7 +256,11 @@ async def get_dashboard_settings():
         ai_base_url=settings.ai_base_url,
         app_host=settings.app_host,
         app_port=settings.app_port,
-        webhook_url=f"http://{settings.app_host}:{settings.app_port}/api/webhooks/github",
+        webhook_url=(
+            f"{settings.public_url.rstrip('/')}/api/webhooks/github"
+            if settings.public_url
+            else f"http://localhost:{settings.app_port}/api/webhooks/github"
+        ),
         max_files_per_review=settings.max_files_per_review,
         chunk_token_limit=settings.chunk_token_limit,
     )

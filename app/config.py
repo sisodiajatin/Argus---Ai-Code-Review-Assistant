@@ -102,7 +102,16 @@ class ServerSettings(BaseAppSettings):
         description="Require GitHub login for the dashboard API. "
         "Set to false only for a local, single-user dashboard.",
     )
-    frontend_url: str = Field(default="", description="Extra allowed CORS origin for the dashboard")
+    dashboard_allowed_users: str = Field(
+        default="",
+        description="Comma-separated GitHub usernames allowed to log in to the dashboard. "
+        "Empty = nobody (GitHub login alone does not grant access).",
+    )
+    frontend_url: str = Field(
+        default="",
+        description="Origin of a separately hosted dashboard (e.g. https://argus.vercel.app). "
+        "Allowed for CORS and used for post-login redirects.",
+    )
 
     # Application
     app_host: str = Field(default="0.0.0.0", description="Application host")
@@ -111,6 +120,10 @@ class ServerSettings(BaseAppSettings):
         default="",
         description="Public base URL of this server (used to show the webhook URL)",
     )
+
+    @property
+    def dashboard_allowed_user_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.dashboard_allowed_users.split(",") if u.strip()}
 
     @property
     def effective_session_secret(self) -> str:
