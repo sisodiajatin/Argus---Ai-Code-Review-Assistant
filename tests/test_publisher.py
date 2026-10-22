@@ -17,6 +17,8 @@ def mock_github():
     github.find_bot_comment = AsyncMock(return_value=None)
     github.edit_comment = AsyncMock()
     github.set_commit_status = AsyncMock()
+    github.create_review = AsyncMock(return_value=55)
+    github.list_review_comments = AsyncMock(return_value=[])
     return github
 
 
@@ -132,8 +134,11 @@ class TestPublishReview:
             summary_text="Test summary",
             installation_id=123,
         )
+        # All three go out in ONE review request
         assert len(comment_ids) == 3
-        assert mock_github.post_review_comment.call_count == 3
+        mock_github.create_review.assert_awaited_once()
+        assert len(mock_github.create_review.await_args.kwargs["comments"]) == 3
+        mock_github.post_review_comment.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_new_comment_when_no_existing(self, mock_github, sample_findings):
@@ -191,6 +196,7 @@ class TestPublishReview:
         )
         assert len(comment_ids) == 0
         mock_github.post_review_comment.assert_not_called()
+        mock_github.create_review.assert_not_called()
 
 
 class TestCommitStatus:
@@ -205,3 +211,89 @@ class TestCommitStatus:
             installation_id=123,
         )
         mock_github.set_commit_status.assert_called_once()
+
+
+class TestPublishPlacementAndDedup:
+    """Line validation, re-push dedup and the 422 fallback."""
+
+    async def _publish(self, github, findings, commentable=None):
+        return await ReviewPublisher(github).publish_review(
+            repo_full_name="o/r", pr_number=1, commit_sha="sha",
+            findings=findings, summary_text="s", installation_id=1,
+            commentable_lines=commentable,
+        )
+
+    async def test_findings_outside_diff_go_to_summary(self, mock_github, sample_findings):
+        commentable = {"app.py": {10, 11, 12}}  # line 20 and utils.py:5 not in diff
+        posted, _ = await self._publish(mock_github, sample_findings, commentable)
+
+        assert len(posted) == 1
+        sent = mock_github.create_review.await_args.kwargs["comments"]
+        assert [(c["path"], c["line"]) for c in sent] == [("app.py", 10)]
+        summary = mock_github.post_issue_comment.await_args.kwargs["body"]
+        assert "Not shown inline" in summary
+        assert "Division by zero" in summary.split("Not shown inline")[1]
+        assert "Unused import" in summary.split("Not shown inline")[1]
+
+    async def test_line_range_snaps_to_first_line_in_diff(self, mock_github):
+        finding = AIFinding(file_path="a.py", line_start=3, line_end=8, category="bug",
+                            severity="warning", title="t", description="d")
+        await self._publish(mock_github, [finding], {"a.py": {6, 7}})
+        assert mock_github.create_review.await_args.kwargs["comments"][0]["line"] == 6
+
+    async def test_multiline_finding_anchors_whole_range(self, mock_github):
+        finding = AIFinding(file_path="a.py", line_start=4, line_end=6, category="bug",
+                            severity="warning", title="t", description="d",
+                            suggested_fix="x = compute()\ny = x + 1\nreturn y")
+        await self._publish(mock_github, [finding], {"a.py": {4, 5, 6}})
+        comment = mock_github.create_review.await_args.kwargs["comments"][0]
+        assert (comment["start_line"], comment["line"]) == (4, 6)
+        assert "```suggestion" in comment["body"]
+
+    async def test_already_posted_findings_are_not_reposted(self, mock_github, sample_findings):
+        await self._publish(mock_github, sample_findings)
+        first_bodies = [c["body"] for c in mock_github.create_review.await_args.kwargs["comments"]]
+
+        # Second push: GitHub now holds those comments
+        mock_github.create_review.reset_mock()
+        mock_github.list_review_comments.return_value = [{"body": b} for b in first_bodies]
+        posted, _ = await self._publish(mock_github, sample_findings)
+
+        assert posted == []
+        mock_github.create_review.assert_not_called()
+
+    async def test_new_finding_still_posted_on_repush(self, mock_github, sample_findings):
+        await self._publish(mock_github, sample_findings[:2])
+        bodies = [c["body"] for c in mock_github.create_review.await_args.kwargs["comments"]]
+        mock_github.create_review.reset_mock()
+        mock_github.list_review_comments.return_value = [{"body": b} for b in bodies]
+
+        posted, _ = await self._publish(mock_github, sample_findings)
+
+        sent = mock_github.create_review.await_args.kwargs["comments"]
+        assert len(posted) == 1
+        assert sent[0]["path"] == "utils.py"
+
+    async def test_rejected_batch_falls_back_to_individual_comments(self, mock_github, sample_findings):
+        import httpx
+        request = httpx.Request("POST", "https://api.github.com/x")
+        mock_github.create_review.side_effect = httpx.HTTPStatusError(
+            "422", request=request, response=httpx.Response(422, request=request)
+        )
+        mock_github.post_review_comment.side_effect = [101, None, 103]  # middle one rejected
+
+        posted, _ = await self._publish(mock_github, sample_findings)
+
+        assert mock_github.post_review_comment.await_count == 3
+        assert len(posted) == 2
+
+
+class TestCommentableLines:
+    def test_added_and_context_lines_are_commentable(self):
+        from app.services.diff_parser import DiffParser
+        from app.services.vcs.base import PRFile
+
+        patch_text = "@@ -1,3 +1,4 @@\n ctx1\n-old\n+new1\n+new2\n ctx2"
+        files = DiffParser().parse_pr_files([PRFile(filename="a.py", status="modified",
+                                                    additions=2, deletions=1, patch=patch_text)])
+        assert DiffParser.commentable_lines(files) == {"a.py": {1, 2, 3, 4}}

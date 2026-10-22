@@ -260,9 +260,8 @@ async def _run_review_pipeline(
             )
 
             # Store raw diff for future fine-tuning
-            raw_diff = "\n".join(
-                f.patch for f in pipeline.diff_parser.parse_pr_files(pr_files) if f.patch
-            )
+            parsed_files = pipeline.diff_parser.parse_pr_files(pr_files)
+            raw_diff = "\n".join(f.patch for f in parsed_files if f.patch)
             pr_record.diff_text = raw_diff
 
             all_findings = result.findings
@@ -329,7 +328,7 @@ async def _run_review_pipeline(
 
             # Step 6: Publish review to GitHub
             publisher = ReviewPublisher(github)
-            comment_ids, summary_id = await publisher.publish_review(
+            await publisher.publish_review(
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
                 commit_sha=head_sha,
@@ -339,6 +338,7 @@ async def _run_review_pipeline(
                 files_reviewed=result.files_reviewed,
                 installation_id=installation_id,
                 pr_description=result.pr_description,
+                commentable_lines=pipeline.diff_parser.commentable_lines(parsed_files),
             )
 
             # Mark PR as completed
