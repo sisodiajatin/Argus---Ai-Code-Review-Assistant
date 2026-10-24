@@ -19,3 +19,4 @@ def find_user(conn: sqlite3.Connection, name: str):
 def average(values: list[float]) -> float:
     # crashes on an empty list
     return sum(values) / len(values)
+
