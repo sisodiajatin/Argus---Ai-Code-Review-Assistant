@@ -14,7 +14,7 @@ STARTER_YAML = """\
 # Place this file in your repo root. CLI flags override these values.
 
 # AI model to use for review
-# model: llama-3.3-70b-versatile
+# model: openai/gpt-oss-120b
 
 # Base branch to compare against (for --type committed)
 # base_branch: main

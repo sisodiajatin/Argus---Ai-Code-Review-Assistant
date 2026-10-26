@@ -58,7 +58,7 @@ def cli(ctx):
 @click.option(
     "--model", "-m",
     default=None,
-    help="Override AI model (e.g., llama-3.3-70b-versatile).",
+    help="Override AI model (e.g., openai/gpt-oss-120b).",
 )
 @click.option(
     "--path", "-p",
@@ -354,7 +354,7 @@ def config_show():
 
 @config.command("init")
 @click.option("--api-key", prompt="AI API Key", help="Your AI provider API key.")
-@click.option("--model", default="llama-3.3-70b-versatile", prompt="AI Model", help="Model name.")
+@click.option("--model", default="openai/gpt-oss-120b", prompt="AI Model", help="Model name.")
 @click.option(
     "--base-url",
     default="https://api.groq.com/openai/v1",
