@@ -297,3 +297,51 @@ class TestCommentableLines:
         files = DiffParser().parse_pr_files([PRFile(filename="a.py", status="modified",
                                                     additions=2, deletions=1, patch=patch_text)])
         assert DiffParser.commentable_lines(files) == {"a.py": {1, 2, 3, 4}}
+
+
+class TestSuggestionBlocksAreCodeOnly:
+    """GitHub applies a ```suggestion block verbatim, so it must hold only code.
+
+    Regression: the model answered "Replace pickle ... Example using JSON:" plus a
+    fenced block, and the whole markdown answer was put inside a suggestion block,
+    so "Apply suggestion" would have pasted the explanation into the source file.
+    """
+
+    LIVE_ANSWER = (
+        "Replace pickle deserialization with a safe format (e.g., JSON) or add strict "
+        "validation before unpickling. Example using JSON:\n"
+        "```python\nimport json\n\ndef load_session(blob: bytes) -> dict:\n"
+        "    return json.loads(blob.decode('utf-8'))\n```"
+    )
+
+    def _body(self, fix):
+        finding = AIFinding(file_path="b.py", line_start=7, category="security",
+                            severity="critical", title="t", description="d", suggested_fix=fix)
+        return ReviewPublisher(MagicMock())._format_finding_comment(finding)
+
+    def test_prose_plus_fence_is_rendered_as_markdown(self):
+        body = self._body(self.LIVE_ANSWER)
+        assert "```suggestion" not in body
+        assert "**Suggested fix:**" in body
+        assert "```python" in body  # the code still renders as a code block
+
+    def test_single_fenced_block_is_unwrapped_into_a_suggestion(self):
+        body = self._body("```python\nreturn json.loads(blob)\n```")
+        assert "```suggestion\nreturn json.loads(blob)\n```" in body
+        assert "```python" not in body
+
+    @pytest.mark.parametrize("fix", [
+        "Move the API key to an environment variable instead of hardcoding it.",
+        "```py\na = 1\n```\n```py\nb = 2\n```",
+        "Use parameters, for example:\ncursor.execute(sql, (uid,))",
+    ])
+    def test_non_code_fixes_never_become_suggestions(self, fix):
+        assert "```suggestion" not in self._body(fix)
+
+    @pytest.mark.parametrize("fix", [
+        "data = json.loads(blob)\nreturn data",
+        "# Use query parameters\ncursor.execute(\"SELECT * FROM t WHERE id = ?\", (uid,))",
+        'def f(x):\n    """Return the double of x."""\n    return x * 2',
+    ])
+    def test_pure_code_still_becomes_a_suggestion(self, fix):
+        assert "```suggestion" in self._body(fix)
