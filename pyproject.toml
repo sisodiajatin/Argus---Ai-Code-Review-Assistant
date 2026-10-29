@@ -54,6 +54,7 @@ dev = [
     "pytest-httpx>=0.35.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.6.0",
+    "jsonschema>=4.0",
 ]
 
 [project.urls]

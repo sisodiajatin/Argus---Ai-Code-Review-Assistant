@@ -169,6 +169,14 @@ class JSONFormatter:
         print(json.dumps(output, indent=2))
 
 
+class SarifFormatter:
+    """SARIF 2.1.0 output for code-scanning tools (GitHub Security tab, IDEs)."""
+
+    def print_review(self, result: ReviewResult, verbose: bool = False):
+        from app.services.sarif import findings_to_sarif
+        print(json.dumps(findings_to_sarif(result.findings, model=result.model_used), indent=2))
+
+
 class PlainFormatter:
     """Plain text output without colors."""
 
@@ -225,6 +233,7 @@ def get_formatter(format_name: str):
         "rich": RichFormatter,
         "json": JSONFormatter,
         "plain": PlainFormatter,
+        "sarif": SarifFormatter,
     }
     cls = formatters.get(format_name, RichFormatter)
     return cls()

@@ -28,6 +28,13 @@ inputs:
     description: "Fail the job when critical findings are reported (true/false)"
     required: false
     default: "true"
+  upload_sarif:
+    description: >-
+      Upload findings to GitHub code scanning (Security tab). Needs
+      `permissions: security-events: write`; free on public repos, needs GitHub
+      Advanced Security on private repos.
+    required: false
+    default: "false"
   python_version:
     description: "Python version to use"
     required: false
@@ -40,6 +47,9 @@ outputs:
   total_findings:
     description: "Total number of findings"
     value: ${{ steps.review.outputs.total_findings }}
+  sarif_file:
+    description: "Path to the SARIF 2.1.0 results file (for your own upload or tooling)"
+    value: ${{ steps.review.outputs.sarif_file }}
 
 runs:
   using: "composite"
@@ -68,6 +78,7 @@ runs:
         INPUT_IGNORE_PATHS: ${{ inputs.ignore_paths }}
         PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         RESULTS_FILE: ${{ runner.temp }}/argus-results.json
+        SARIF_FILE: ${{ runner.temp }}/argus-results.sarif
       run: |
         set -euo pipefail
 
@@ -79,7 +90,7 @@ runs:
           echo "::warning::Could not fetch base branch '${BASE}'"
         fi
 
-        ARGS=(review --base "origin/${BASE}" --format json)
+        ARGS=(review --base "origin/${BASE}" --format json --sarif "$SARIF_FILE")
         if [ -n "${INPUT_IGNORE_PATHS}" ]; then
           ARGS+=(--ignore "${INPUT_IGNORE_PATHS}")
         fi
@@ -106,6 +117,7 @@ runs:
         print(f"critical_count={sum(1 for f in findings if f.get('severity') == 'critical')}")
         print(f"total_findings={len(findings)}")
         PY
+        echo "sarif_file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
 
     - name: Post PR Comment
       if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
@@ -116,6 +128,13 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         RESULTS_FILE: ${{ runner.temp }}/argus-results.json
       run: python3 "$GITHUB_ACTION_PATH/action_post_comment.py" "$REPO" "$PR_NUMBER" "$RESULTS_FILE"
+
+    - name: Upload SARIF to code scanning
+      if: inputs.upload_sarif == 'true' && steps.review.outputs.sarif_file != ''
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ steps.review.outputs.sarif_file }}
+        category: argus
 
     - name: Fail on critical findings
       if: inputs.fail_on_critical == 'true' && steps.review.outputs.critical_count != '0'
