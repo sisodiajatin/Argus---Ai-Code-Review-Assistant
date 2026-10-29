@@ -89,15 +89,15 @@ def _result(finding: AIFinding, rule_index: int) -> dict:
 
 def findings_to_sarif(findings: list[AIFinding], *, model: str = "") -> dict:
     """Build a SARIF 2.1.0 log for one Argus run."""
-    rule_ids: list[str] = []
+    rule_index: dict[str, int] = {}  # rule id -> position in `rules`
     rules: list[dict] = []
     results: list[dict] = []
     for finding in findings:
         rid = _rule_id(finding)
-        if rid not in rule_ids:
-            rule_ids.append(rid)
+        if rid not in rule_index:
+            rule_index[rid] = len(rules)
             rules.append(_rule(finding.category, finding.severity))
-        results.append(_result(finding, rule_ids.index(rid)))
+        results.append(_result(finding, rule_index[rid]))
 
     driver = {
         "name": "Argus",
