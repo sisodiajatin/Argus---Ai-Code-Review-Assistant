@@ -24,6 +24,21 @@ FINGERPRINT_RE = re.compile(r"<!-- argus-finding:([0-9a-f]{16}) -->")
 # Most findings listed in the summary when they can't be placed inline.
 MAX_UNPLACED_IN_SUMMARY = 15
 
+# A fix that is exactly one fenced code block (optionally with a language tag).
+_SINGLE_FENCE_RE = re.compile(r"```[\w+.#-]*[ \t]*\n(.*?)\n?```", re.DOTALL)
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+_COMMENT_PREFIXES = ("#", "//", "/*", "*", "--", '"""', "'''")
+
+
+def _looks_like_prose(line: str) -> bool:
+    """A sentence rather than code: several plain words and little code syntax."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(_COMMENT_PREFIXES):
+        return False  # blank lines and comments are fine inside code
+    words = _WORD_RE.findall(stripped)
+    code_chars = sum(stripped.count(c) for c in "=(){}[];:<>")
+    return len(words) >= 6 and code_chars <= 1 and stripped[0].isupper()
+
 
 def finding_fingerprint(finding: AIFinding, line: int | None) -> str:
     """Stable ID for a finding at a location (file, line, title)."""
@@ -397,15 +412,39 @@ class ReviewPublisher:
 
         if finding.suggested_fix:
             fix = finding.suggested_fix.strip()
-            if self._looks_like_code(fix):
-                parts.extend(["", "```suggestion", fix, "```"])
+            code = self._suggestion_code(fix)
+            if code is not None:
+                # GitHub applies a suggestion block verbatim as replacement code,
+                # so it must contain nothing but code.
+                parts.extend(["", "```suggestion", code, "```"])
             else:
-                parts.extend(["", "**Suggested fix:**", fix])
+                parts.extend(["", "**Suggested fix:**", "", fix])
 
         if fingerprint:
             parts.extend(["", f"<!-- argus-finding:{fingerprint} -->"])
 
         return "\n".join(parts)
+
+    @classmethod
+    def _suggestion_code(cls, fix: str) -> str | None:
+        """Return pure replacement code for a suggestion block, or None.
+
+        The model often answers in markdown: an explanation plus a fenced
+        code block. Putting that inside a suggestion block would make
+        "Apply suggestion" paste the explanation into the source file.
+        """
+        text = fix.strip()
+        if "```" in text:
+            # Accept only a fix that is exactly one fenced block, nothing else.
+            match = _SINGLE_FENCE_RE.fullmatch(text)
+            if not match:
+                return None
+            text = match.group(1).strip("\n")
+            if "```" in text:
+                return None
+        if not text or any(_looks_like_prose(line) for line in text.splitlines()):
+            return None
+        return text if cls._looks_like_code(text) else None
 
     @staticmethod
     def _looks_like_code(text: str) -> bool:
