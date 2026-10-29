@@ -4,7 +4,7 @@ All notable changes to Argus are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-10-28
 
 ### Fixed
 - Default models updated: Groq retired `llama-3.3-70b-versatile` on
@@ -90,5 +90,6 @@ use Argus as a CI gate.**
 
 - Initial release: CLI, GitHub webhook server, dashboard and GitHub Action.
 
+[0.2.1]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/compare/14b34fa...v0.2.0
 [0.1.0]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/commit/14b34fa
