@@ -115,6 +115,10 @@ argus review --type staged
 # JSON output (for CI/scripting)
 argus review --format json
 
+# SARIF for code-scanning tools (GitHub Security tab, VS Code SARIF Viewer)
+argus review --format sarif > results.sarif
+argus review --format json --sarif results.sarif   # both at once
+
 # Override model
 argus review --model gpt-4
 
@@ -164,7 +168,7 @@ jobs:
       contents: read
       pull-requests: write   # needed to post the review comment
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: sisodiajatin/Argus---Ai-Code-Review-Assistant@main
@@ -182,11 +186,33 @@ jobs:
 | `base_branch` | (auto-detected) | Branch to compare against |
 | `ignore_paths` | `""` | Comma-separated glob patterns |
 | `fail_on_critical` | `true` | Fail the job when critical findings are reported |
+| `upload_sarif` | `false` | Also upload findings to GitHub code scanning (**Security** tab) |
 
 The job also fails if the review itself can't complete (for example, an invalid API key),
 so an AI provider outage is never mistaken for a clean review.
 
-**Outputs:** `critical_count`, `total_findings`.
+**Outputs:** `critical_count`, `total_findings`, `sarif_file`.
+
+**Findings in the Security tab:** set `upload_sarif: true` and grant `security-events: write`:
+
+```yaml
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write   # for upload_sarif
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: sisodiajatin/Argus---Ai-Code-Review-Assistant@main
+        with:
+          ai_api_key: ${{ secrets.AI_API_KEY }}
+          upload_sarif: true
+```
+
+Code scanning is free for public repositories. Private repositories need GitHub
+Advanced Security. If a review can't complete, no SARIF is written, so an outage
+never shows up as a clean scan.
 
 ---
 

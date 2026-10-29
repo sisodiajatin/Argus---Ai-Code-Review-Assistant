@@ -7,6 +7,11 @@ All notable changes to Argus are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **SARIF 2.1.0 output.** `argus review --format sarif` or `--sarif FILE`
+  (alongside other formats), validated against the official schema. The
+  GitHub Action gains `upload_sarif` to show findings in the Security tab
+  (code scanning) and a `sarif_file` output. No SARIF is written when a
+  review fails.
 - **Incremental review.** On a new push, only files changed since the last
   completed review are sent to the AI; findings in untouched files carry over,
   so the commit status still reflects the whole PR (an unfixed critical keeps

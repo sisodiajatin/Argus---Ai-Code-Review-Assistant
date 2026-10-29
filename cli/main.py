@@ -51,7 +51,7 @@ def cli(ctx):
 )
 @click.option(
     "--format", "-f", "output_format",
-    type=click.Choice(["rich", "json", "plain"]),
+    type=click.Choice(["rich", "json", "plain", "sarif"]),
     default=None,
     help="Output format (default: interactive TUI).",
 )
@@ -75,14 +75,37 @@ def cli(ctx):
     multiple=True,
     help="Glob pattern to skip (repeatable, or comma-separated). Adds to .argus.yaml 'ignore'.",
 )
-def review(base, change_type, output_format, model, path, verbose, ignore_patterns):
+@click.option(
+    "--sarif", "sarif_path",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True),
+    help="Also write findings as SARIF 2.1.0 to this file (for GitHub code scanning).",
+)
+def review(base, change_type, output_format, model, path, verbose, ignore_patterns, sarif_path):
     """Review code changes using AI.
 
     Exit codes: 0 = no critical findings, 1 = critical findings,
     2 = the review could not be completed (e.g. the AI provider failed).
     """
     asyncio.run(
-        _run_review(base, change_type, output_format, model, path, verbose, ignore_patterns)
+        _run_review(
+            base, change_type, output_format, model, path, verbose, ignore_patterns, sarif_path
+        )
+    )
+
+
+def _write_sarif(sarif_path: str | None, result) -> None:
+    """Write the SARIF file, if requested. Only called after a completed review."""
+    if not sarif_path:
+        return
+    import json
+    from pathlib import Path
+
+    from app.services.sarif import findings_to_sarif
+
+    Path(sarif_path).write_text(
+        json.dumps(findings_to_sarif(result.findings, model=result.model_used), indent=2),
+        encoding="utf-8",
     )
 
 
@@ -121,7 +144,9 @@ async def _run_pipeline_or_exit(settings, pr_files, title, author, base_branch, 
         sys.exit(EXIT_REVIEW_FAILED)
 
 
-async def _run_review(base, change_type, output_format, model, path, verbose, ignore_patterns=()):
+async def _run_review(
+    base, change_type, output_format, model, path, verbose, ignore_patterns=(), sarif_path=None
+):
     """Async implementation of the review command."""
     from cli.config_file import load_repo_config
 
@@ -161,14 +186,19 @@ async def _run_review(base, change_type, output_format, model, path, verbose, ig
     use_tui = output_format is None and sys.stdout.isatty()
 
     if use_tui:
-        await _run_tui_review(settings, base, change_type, model, path, verbose, ignored_paths)
+        await _run_tui_review(
+            settings, base, change_type, model, path, verbose, ignored_paths, sarif_path
+        )
     else:
         await _run_plain_review(
-            settings, base, change_type, output_format, model, path, verbose, ignored_paths
+            settings, base, change_type, output_format, model, path, verbose, ignored_paths,
+            sarif_path,
         )
 
 
-async def _run_tui_review(settings, base, change_type, model, path, verbose, ignored_paths=None):
+async def _run_tui_review(
+    settings, base, change_type, model, path, verbose, ignored_paths=None, sarif_path=None
+):
     """Run review with the interactive TUI."""
     from cli.tui import ArgusTUI
 
@@ -204,6 +234,7 @@ async def _run_tui_review(settings, base, change_type, model, path, verbose, ign
     if not pr_files:
         tui.show_welcome(repo_info, 0, 0, 0, review_type)
         tui.show_no_changes()
+        _write_sarif(sarif_path, ReviewResult())  # empty log keeps upload steps working
         sys.exit(0)
 
     # Calculate stats
@@ -239,6 +270,7 @@ async def _run_tui_review(settings, base, change_type, model, path, verbose, ign
 
     # Show results
     tui.show_results(result, verbose=verbose)
+    _write_sarif(sarif_path, result)
 
     # Exit with non-zero if critical findings
     critical = sum(1 for f in result.findings if f.severity == "critical")
@@ -247,7 +279,8 @@ async def _run_tui_review(settings, base, change_type, model, path, verbose, ign
 
 
 async def _run_plain_review(
-    settings, base, change_type, output_format, model, path, verbose, ignored_paths=None
+    settings, base, change_type, output_format, model, path, verbose, ignored_paths=None,
+    sarif_path=None,
 ):
     """Run review with traditional formatter output (no TUI)."""
     # Get the formatter
@@ -285,11 +318,12 @@ async def _run_plain_review(
         title = f"Uncommitted changes on {repo_info['branch']}"
 
     if not pr_files:
-        if fmt == "json":
+        if fmt in ("json", "sarif"):
             # Keep stdout machine-readable for CI consumers.
             formatter.print_review(ReviewResult(summary="No changes found to review."))
         else:
             click.echo("No changes found to review.")
+        _write_sarif(sarif_path, ReviewResult())  # empty log keeps upload steps working
         sys.exit(0)
 
     if verbose:
@@ -322,6 +356,7 @@ async def _run_plain_review(
 
     # Output results
     formatter.print_review(result, verbose=verbose)
+    _write_sarif(sarif_path, result)
 
     # Exit with non-zero if critical findings
     critical = sum(1 for f in result.findings if f.severity == "critical")
