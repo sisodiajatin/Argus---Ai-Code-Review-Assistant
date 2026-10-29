@@ -24,7 +24,7 @@ class BaseAppSettings(BaseSettings):
 
     # AI Provider Configuration (any OpenAI-compatible API)
     ai_api_key: str = Field(default="", description="API key for the AI provider")
-    ai_model: str = Field(default="gemini-2.0-flash", description="Model to use for code review")
+    ai_model: str = Field(default="gemini-3.8-flash", description="Model to use for code review")
     ai_base_url: str = Field(
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         description="Base URL for the OpenAI-compatible API",

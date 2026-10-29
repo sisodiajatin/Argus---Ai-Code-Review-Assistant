@@ -4,6 +4,16 @@ All notable changes to Argus are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Default models updated: Groq retired `llama-3.3-70b-versatile` on
+  2026-08-16 and Google retired `gemini-2.0-flash` on 2026-06-01, so every
+  review with the old defaults failed with "model not found". Groq examples
+  and the GitHub Action now default to `openai/gpt-oss-120b`; the built-in
+  default is `gemini-3.8-flash`. If you set `AI_MODEL` yourself to one of the
+  retired models, change it.
+
 ## [0.2.0] - 2026-10-23
 
 A security and correctness release. **Upgrade if you run the webhook server or

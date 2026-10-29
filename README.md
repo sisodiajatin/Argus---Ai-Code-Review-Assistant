@@ -77,7 +77,7 @@ Then configure your API key:
 ```bash
 argus config set ai.api_key YOUR_API_KEY
 argus config set ai.base_url https://api.groq.com/openai/v1
-argus config set ai.model llama-3.3-70b-versatile
+argus config set ai.model openai/gpt-oss-120b
 ```
 
 > **Windows users:** If `argus` is not recognized after install, you need to add Python's Scripts folder to your PATH. Run `python -c "import sysconfig; print(sysconfig.get_path('scripts'))"` to find the path, then add it to your system PATH environment variable and restart your terminal.
@@ -175,7 +175,7 @@ jobs:
 | Input | Default | Description |
 |-------|---------|-------------|
 | `ai_api_key` | (required) | API key for the AI provider |
-| `ai_model` | `llama-3.3-70b-versatile` | Model name |
+| `ai_model` | `openai/gpt-oss-120b` | Model name |
 | `ai_base_url` | `https://api.groq.com/openai/v1` | Base URL |
 | `base_branch` | (auto-detected) | Branch to compare against |
 | `ignore_paths` | `""` | Comma-separated glob patterns |
@@ -194,7 +194,7 @@ Create a `.argus.yaml` in your repo root:
 
 ```yaml
 # AI model to use
-model: llama-3.3-70b-versatile
+model: openai/gpt-oss-120b
 
 # Default base branch
 base_branch: main
@@ -237,7 +237,7 @@ GITHUB_PRIVATE_KEY_PATH=./private-key.pem
 GITHUB_WEBHOOK_SECRET=your_webhook_secret
 
 AI_API_KEY=your_api_key
-AI_MODEL=llama-3.3-70b-versatile
+AI_MODEL=openai/gpt-oss-120b
 AI_BASE_URL=https://api.groq.com/openai/v1
 
 PUBLIC_URL=https://your-domain.com

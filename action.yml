@@ -11,7 +11,7 @@ inputs:
   ai_model:
     description: "AI model name"
     required: false
-    default: "llama-3.3-70b-versatile"
+    default: "openai/gpt-oss-120b"
   ai_base_url:
     description: "Base URL for the AI API"
     required: false
