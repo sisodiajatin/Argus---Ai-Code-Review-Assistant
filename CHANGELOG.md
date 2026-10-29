@@ -7,6 +7,11 @@ All notable changes to Argus are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Incremental review.** On a new push, only files changed since the last
+  completed review are sent to the AI; findings in untouched files carry over,
+  so the commit status still reflects the whole PR (an unfixed critical keeps
+  it red; fixing it turns it green). Full review on first review, force-push
+  or rebase, and dashboard re-review. `INCREMENTAL_REVIEW=false` disables it.
 - **Learns from feedback.** Findings marked "not helpful" on the dashboard
   aren't raised again in the same repository. The model is told what was
   rejected, and close matches are filtered deterministically. Critical

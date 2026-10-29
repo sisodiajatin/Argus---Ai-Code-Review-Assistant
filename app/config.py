@@ -113,6 +113,10 @@ class ServerSettings(BaseAppSettings):
         "Allowed for CORS and used for post-login redirects.",
     )
 
+    # Incremental review: on a new push, re-review only files changed since the
+    # last completed review and carry forward findings for the rest.
+    incremental_review: bool = Field(default=True, description="Review only files changed since the last review")
+
     # Application
     app_host: str = Field(default="0.0.0.0", description="Application host")
     app_port: int = Field(default=8000, description="Application port")

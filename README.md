@@ -33,6 +33,7 @@ AI-powered code review that works everywhere — as a **GitHub webhook**, a **CL
 | **Re-push Detection** | Edits existing comment instead of spamming new ones |
 | **Commit Status Checks** | Sets pending/success/failure on commits |
 | **Dashboard** | Web UI with analytics, settings, and re-review buttons |
+| **Incremental Review** | On each push, only files changed since the last review are re-reviewed; findings in untouched files carry over, so the status check still covers the whole PR |
 | **Learns from Feedback** | Findings marked "not helpful" on the dashboard aren't raised again in that repo (critical findings are never hidden) |
 | **GitHub Action** | Drop-in CI/CD integration for any repo |
 | **Per-Repo Config** | `.argus.yaml` for project-specific settings |
@@ -409,6 +410,21 @@ All dashboard endpoints require a logged-in, allowlisted user (HTTP 401 otherwis
 | `GET` | `/auth/github/callback` | OAuth callback |
 | `GET` | `/auth/logout` | Clear session |
 | `GET` | `/auth/me` | Current user and whether login is required |
+
+---
+
+## Incremental Review
+
+On a new push to an open PR, Argus asks GitHub what changed since the last completed
+review. **Changed files** are re-reviewed in full, so a fix clears its finding.
+**Untouched files** are not sent to the AI, and their findings are carried over. The
+summary comment says what happened, for example: *"re-reviewed 1 of 12 files changed since `a1b2c3d`"*.
+
+It works per file rather than per line on purpose. If only new lines were reviewed, an
+unfixed critical from an earlier push would let the status turn green.
+
+Argus falls back to a full review for the first review of a PR, after a force-push or
+rebase, and for the dashboard's **Re-review** button. Disable it with `INCREMENTAL_REVIEW=false`.
 
 ---
 

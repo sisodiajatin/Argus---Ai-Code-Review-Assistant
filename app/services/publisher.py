@@ -74,6 +74,7 @@ class ReviewPublisher:
         pr_description: str = "",
         commentable_lines: dict[str, set[int]] | None = None,
         suppressed_findings: list[AIFinding] | None = None,
+        review_note: str = "",
     ) -> tuple[list[str], int | None]:
         """Publish a complete review: one batch of inline comments + a summary.
 
@@ -111,6 +112,7 @@ class ReviewPublisher:
             pr_description=pr_description,
             unplaced_findings=unplaced,
             suppressed_findings=suppressed_findings,
+            review_note=review_note,
         )
 
         # Check for an existing Argus comment to edit (re-push scenario)
@@ -261,6 +263,7 @@ class ReviewPublisher:
         pr_description: str = "",
         unplaced_findings: list[AIFinding] | None = None,
         suppressed_findings: list[AIFinding] | None = None,
+        review_note: str = "",
     ) -> str:
         """Build a formatted markdown summary comment for the PR."""
         critical = sum(1 for f in findings if f.severity == "critical")
@@ -316,6 +319,10 @@ class ReviewPublisher:
                     file_ref += f":{f.line_start}"
                 file_ref += "`"
                 parts.append(f"- {emoji} **{f.title}** ({cat}) — {file_ref}")
+            parts.append("")
+
+        if review_note:
+            parts.append(f"> ℹ️ {review_note}")
             parts.append("")
 
         # Findings hidden because this repo's reviewers rejected similar ones
