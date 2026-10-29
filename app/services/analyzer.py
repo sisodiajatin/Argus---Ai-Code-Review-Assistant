@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import openai
@@ -75,6 +76,7 @@ class AIAnalyzer:
         pr_title: str,
         pr_author: str,
         base_branch: str = "main",
+        feedback_hint: str = "",
     ) -> AIReviewResult:
         """Analyze a single review chunk and return findings.
 
@@ -102,6 +104,7 @@ class AIAnalyzer:
             pr_author=pr_author,
             diff_content=diff_content,
             base_branch=base_branch,
+            feedback_hint=feedback_hint,
         )
 
         # Build system prompt with language-specific hints
@@ -176,6 +179,8 @@ class AIAnalyzer:
         pr_title: str,
         pr_author: str,
         base_branch: str = "main",
+        feedback_hint: str = "",
+        finding_filter: Callable[[list[AIFinding]], list[AIFinding]] | None = None,
     ) -> tuple[list[AIFinding], str, int, float]:
         """Analyze all chunks of a PR and compile results.
 
@@ -197,7 +202,9 @@ class AIAnalyzer:
 
         async def analyze_with_limit(chunk: ReviewChunk) -> AIReviewResult:
             async with semaphore:
-                return await self.analyze_chunk(chunk, pr_title, pr_author, base_branch)
+                return await self.analyze_chunk(
+                    chunk, pr_title, pr_author, base_branch, feedback_hint=feedback_hint
+                )
 
         results = await asyncio.gather(
             *[analyze_with_limit(chunk) for chunk in chunks],
@@ -219,6 +226,9 @@ class AIAnalyzer:
             raise ReviewIncompleteError(failed=len(failures), total=len(chunks), errors=failures)
 
         all_findings = self._dedupe_findings(all_findings)
+        if finding_filter is not None:
+            # Applied before the summary so it never describes removed findings.
+            all_findings = finding_filter(all_findings)
 
         # Generate overall summary
         summary_text, summary_tokens = await self._generate_summary(

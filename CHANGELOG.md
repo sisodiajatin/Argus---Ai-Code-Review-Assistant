@@ -4,6 +4,15 @@ All notable changes to Argus are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Learns from feedback.** Findings marked "not helpful" on the dashboard
+  aren't raised again in the same repository. The model is told what was
+  rejected, and close matches are filtered deterministically. Critical
+  findings are never hidden. Hidden findings are listed in a collapsed
+  section of the PR summary.
+
 ## [0.2.1] - 2026-10-28
 
 ### Fixed
