@@ -35,9 +35,16 @@ def _looks_like_prose(line: str) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith(_COMMENT_PREFIXES):
         return False  # blank lines and comments are fine inside code
+    if not stripped[0].isupper():
+        return False
     words = _WORD_RE.findall(stripped)
-    code_chars = sum(stripped.count(c) for c in "=(){}[];:<>")
-    return len(words) >= 6 and code_chars <= 1 and stripped[0].isupper()
+    # Ignore a trailing ":" or "." (lead-ins like "Use parameters, for example:").
+    body = stripped.rstrip(":.")
+    code_chars = sum(body.count(c) for c in "=(){}[];:<>`")
+    if code_chars == 0:
+        return len(words) >= 3
+    # A long sentence may contain a parenthetical "(e.g., JSON)".
+    return len(words) >= 8 and code_chars <= 2
 
 
 def finding_fingerprint(finding: AIFinding, line: int | None) -> str:
