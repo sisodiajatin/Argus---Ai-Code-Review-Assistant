@@ -2,6 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -20,9 +21,17 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        options = {}
+        if settings.database_url.startswith("sqlite"):
+            # Opening a SQLite connection is just opening a file, so pooling buys
+            # nothing. Pooled aiosqlite connections are also bound to the event
+            # loop that created them; if that loop ends first (background tasks,
+            # tests), closing them later fails with "Event loop is closed".
+            options["poolclass"] = NullPool
         _engine = create_async_engine(
             settings.database_url,
             echo=settings.log_level == "debug",
+            **options,
         )
     return _engine
 
