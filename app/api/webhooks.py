@@ -20,6 +20,9 @@ from app.models.schemas import WebhookResponse
 from app.services.analyzer import ReviewIncompleteError
 from app.services.background import spawn
 from app.services.feedback import load_feedback_memory
+from app.services.incremental import IncrementalPlan, plan_incremental_review
+from app.services.analyzer import AIAnalyzer
+from app.services.review_pipeline import ReviewResult
 from app.services.vcs.github_provider import GitHubProvider
 from app.services.review_pipeline import ReviewPipeline
 from app.services.publisher import ReviewPublisher
@@ -128,6 +131,8 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
             head_sha=head_sha,
             base_branch=pr_data.get("base", {}).get("ref", "main"),
             ignored_paths=repo.ignored_paths,
+            # Only a normal push can be reviewed incrementally; opened/reopened get a full review.
+            incremental=action == "synchronize",
         ),
         name=f"review:{repo_full_name}#{pr_number}",
     )
@@ -219,6 +224,7 @@ async def _run_review_pipeline(
     head_sha: str,
     base_branch: str,
     ignored_paths: list[str],
+    incremental: bool = False,
 ):
     """Execute the full review pipeline asynchronously.
 
@@ -250,6 +256,21 @@ async def _run_review_pipeline(
             )
             logger.info(f"Fetched {len(pr_files)} files from PR")
 
+            # Incremental: only re-review files changed since the last completed review
+            plan: IncrementalPlan | None = None
+            if incremental and get_settings().incremental_review:
+                try:
+                    plan = await plan_incremental_review(
+                        db, github,
+                        repo_full_name=repo_full_name, repo_id=repo_id, pr_number=pr_number,
+                        head_sha=head_sha, pr_files=pr_files, installation_id=installation_id,
+                    )
+                except Exception as plan_err:  # any doubt -> full review
+                    logger.warning(f"Incremental planning failed ({plan_err}); full review")
+                    plan = None
+                if plan:
+                    logger.info(plan.describe)
+
             # Step 2: Run the review pipeline, informed by this repo's past feedback
             try:
                 feedback = await load_feedback_memory(db, repo_id)
@@ -257,14 +278,20 @@ async def _run_review_pipeline(
                 logger.warning(f"Could not load feedback for repo {repo_id}: {fb_err}")
                 feedback = None
             pipeline = ReviewPipeline()
-            result = await pipeline.run(
-                pr_files=pr_files,
-                title=pr_title,
-                author=pr_author,
-                base_branch=base_branch,
-                ignored_paths=ignored_paths,
-                feedback=feedback,
-            )
+            if plan is not None and not plan.review_files:
+                # Nothing reviewable changed since the last review (e.g. only
+                # ignored files): skip the model, keep the previous findings.
+                result = ReviewResult(summary=plan.previous_summary, model_used=pipeline.settings.ai_model)
+            else:
+                result = await pipeline.run(
+                    pr_files=plan.review_files if plan else pr_files,
+                    title=pr_title,
+                    author=pr_author,
+                    base_branch=base_branch,
+                    ignored_paths=ignored_paths,
+                    feedback=feedback,
+                    description_files=pr_files if plan else None,
+                )
 
             # Store raw diff for future fine-tuning
             parsed_files = pipeline.diff_parser.parse_pr_files(pr_files)
@@ -272,8 +299,12 @@ async def _run_review_pipeline(
             pr_record.diff_text = raw_diff
 
             all_findings = result.findings
+            if plan is not None:
+                # Status and counts cover the whole PR, not just the re-reviewed files.
+                all_findings = AIAnalyzer._dedupe_findings(all_findings + plan.carried_findings)
             summary_text = result.summary
             total_tokens = result.tokens_used
+            nothing_rereviewed = plan is not None and result.chunks_processed == 0
 
             if not all_findings and result.chunks_processed == 0:
                 logger.info(f"No reviewable chunks for {repo_full_name}#{pr_number}")
@@ -333,21 +364,24 @@ async def _run_review_pipeline(
             )
             db.add(db_summary)
 
-            # Step 6: Publish review to GitHub
+            # Step 6: Publish review to GitHub. When nothing was re-reviewed the
+            # existing comments are still accurate, so leave them untouched.
             publisher = ReviewPublisher(github)
-            await publisher.publish_review(
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                commit_sha=head_sha,
-                findings=all_findings,
-                summary_text=summary_text,
-                processing_time_ms=result.processing_time_ms,
-                files_reviewed=result.files_reviewed,
-                installation_id=installation_id,
-                pr_description=result.pr_description,
-                commentable_lines=pipeline.diff_parser.commentable_lines(parsed_files),
-                suppressed_findings=result.suppressed_findings,
-            )
+            if not nothing_rereviewed:
+                await publisher.publish_review(
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    commit_sha=head_sha,
+                    findings=all_findings,
+                    summary_text=summary_text,
+                    processing_time_ms=result.processing_time_ms,
+                    files_reviewed=plan.total_files if plan else result.files_reviewed,
+                    installation_id=installation_id,
+                    pr_description=result.pr_description,
+                    commentable_lines=pipeline.diff_parser.commentable_lines(parsed_files),
+                    suppressed_findings=result.suppressed_findings,
+                    review_note=plan.describe if plan else "",
+                )
 
             # Mark PR as completed
             pr_record.status = PRStatus.COMPLETED.value

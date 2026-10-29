@@ -57,6 +57,7 @@ class ReviewPipeline:
         base_branch: str = "main",
         ignored_paths: list[str] | None = None,
         feedback: FeedbackMemory | None = None,
+        description_files: list[PRFile] | None = None,
     ) -> ReviewResult:
         """Execute the full review pipeline and return results.
 
@@ -67,6 +68,8 @@ class ReviewPipeline:
             base_branch: Target branch for context.
             ignored_paths: Glob patterns for files to skip.
             feedback: Past reviewer feedback for this repository, if any.
+            description_files: Files to describe in the PR summary when they
+                differ from pr_files (incremental reviews describe the whole PR).
 
         Returns:
             ReviewResult with findings, summary, and metadata.
@@ -108,8 +111,13 @@ class ReviewPipeline:
             feedback_hint=build_feedback_hint(feedback),
             finding_filter=_suppress,
         )
+        description_chunks = chunks
+        if description_files is not None:
+            description_chunks = self.chunker.create_chunks(
+                self.diff_parser.parse_pr_files(description_files), ignored_paths or []
+            ) or chunks
         summary_task = self.analyzer.generate_pr_summary_with_usage(
-            chunks=chunks,
+            chunks=description_chunks,
             pr_title=title,
             pr_author=author,
             base_branch=base_branch,

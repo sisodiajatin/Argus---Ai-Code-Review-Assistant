@@ -187,6 +187,32 @@ class GitHubProvider(VCSProvider):
             )
         return files
 
+    async def compare_commits(
+        self,
+        repo_full_name: str,
+        base_sha: str,
+        head_sha: str,
+        installation_id: int | None = None,
+    ) -> tuple[str, list[str]]:
+        """Compare two commits.
+
+        Returns (status, changed_paths). status is GitHub's: "ahead" when head
+        is a descendant of base (a normal push), "diverged"/"behind" after a
+        force-push or rebase, "identical" when nothing changed. Changed paths
+        include the old name of renamed files.
+        """
+        data = await self._make_api_request(
+            "GET",
+            f"/repos/{repo_full_name}/compare/{base_sha}...{head_sha}",
+            installation_id=installation_id or 0,
+        )
+        paths: list[str] = []
+        for f in data.get("files", []):
+            paths.append(f["filename"])
+            if f.get("previous_filename"):
+                paths.append(f["previous_filename"])
+        return data.get("status", ""), paths
+
     async def get_file_content(
         self,
         repo_full_name: str,
