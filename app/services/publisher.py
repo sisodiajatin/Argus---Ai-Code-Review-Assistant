@@ -73,6 +73,7 @@ class ReviewPublisher:
         installation_id: int | None = None,
         pr_description: str = "",
         commentable_lines: dict[str, set[int]] | None = None,
+        suppressed_findings: list[AIFinding] | None = None,
     ) -> tuple[list[str], int | None]:
         """Publish a complete review: one batch of inline comments + a summary.
 
@@ -109,6 +110,7 @@ class ReviewPublisher:
             commit_sha=commit_sha,
             pr_description=pr_description,
             unplaced_findings=unplaced,
+            suppressed_findings=suppressed_findings,
         )
 
         # Check for an existing Argus comment to edit (re-push scenario)
@@ -258,6 +260,7 @@ class ReviewPublisher:
         commit_sha: str = "",
         pr_description: str = "",
         unplaced_findings: list[AIFinding] | None = None,
+        suppressed_findings: list[AIFinding] | None = None,
     ) -> str:
         """Build a formatted markdown summary comment for the PR."""
         critical = sum(1 for f in findings if f.severity == "critical")
@@ -313,6 +316,25 @@ class ReviewPublisher:
                     file_ref += f":{f.line_start}"
                 file_ref += "`"
                 parts.append(f"- {emoji} **{f.title}** ({cat}) — {file_ref}")
+            parts.append("")
+
+        # Findings hidden because this repo's reviewers rejected similar ones
+        if suppressed_findings:
+            n = len(suppressed_findings)
+            parts.append("<details>")
+            parts.append(
+                f"<summary>🔕 {n} finding{'s' if n != 1 else ''} hidden: similar findings were "
+                "marked “not helpful” in this repository</summary>"
+            )
+            parts.append("")
+            for f in suppressed_findings[:MAX_UNPLACED_IN_SUMMARY]:
+                loc = f"`{f.file_path}:{f.line_start}`" if f.line_start else f"`{f.file_path}`"
+                parts.append(f"- {SEVERITY_EMOJI.get(f.severity, 'ℹ️')} **{f.title}** — {loc}")
+            if n > MAX_UNPLACED_IN_SUMMARY:
+                parts.append(f"- …and {n - MAX_UNPLACED_IN_SUMMARY} more")
+            parts.append("")
+            parts.append("_Mark findings helpful on the Argus dashboard to bring them back._")
+            parts.append("</details>")
             parts.append("")
 
         # Findings that couldn't be attached to a diff line

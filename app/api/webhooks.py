@@ -19,6 +19,7 @@ from app.models.review import ReviewFinding, ReviewSummary
 from app.models.schemas import WebhookResponse
 from app.services.analyzer import ReviewIncompleteError
 from app.services.background import spawn
+from app.services.feedback import load_feedback_memory
 from app.services.vcs.github_provider import GitHubProvider
 from app.services.review_pipeline import ReviewPipeline
 from app.services.publisher import ReviewPublisher
@@ -249,7 +250,12 @@ async def _run_review_pipeline(
             )
             logger.info(f"Fetched {len(pr_files)} files from PR")
 
-            # Step 2: Run the review pipeline
+            # Step 2: Run the review pipeline, informed by this repo's past feedback
+            try:
+                feedback = await load_feedback_memory(db, repo_id)
+            except Exception as fb_err:  # feedback is an enhancement, never a blocker
+                logger.warning(f"Could not load feedback for repo {repo_id}: {fb_err}")
+                feedback = None
             pipeline = ReviewPipeline()
             result = await pipeline.run(
                 pr_files=pr_files,
@@ -257,6 +263,7 @@ async def _run_review_pipeline(
                 author=pr_author,
                 base_branch=base_branch,
                 ignored_paths=ignored_paths,
+                feedback=feedback,
             )
 
             # Store raw diff for future fine-tuning
@@ -339,6 +346,7 @@ async def _run_review_pipeline(
                 installation_id=installation_id,
                 pr_description=result.pr_description,
                 commentable_lines=pipeline.diff_parser.commentable_lines(parsed_files),
+                suppressed_findings=result.suppressed_findings,
             )
 
             # Mark PR as completed

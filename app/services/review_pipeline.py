@@ -15,6 +15,7 @@ from app.services.vcs.base import PRFile
 from app.services.diff_parser import DiffParser
 from app.services.chunker import SmartChunker
 from app.services.analyzer import AIAnalyzer
+from app.services.feedback import FeedbackMemory, apply_feedback, build_feedback_hint
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ class ReviewResult:
     chunks_processed: int = 0
     files_reviewed: int = 0
     model_used: str = ""
+    # Findings hidden because similar ones were marked "not helpful" in this repo
+    suppressed_findings: list[AIFinding] = field(default_factory=list)
 
 
 class ReviewPipeline:
@@ -53,6 +56,7 @@ class ReviewPipeline:
         author: str,
         base_branch: str = "main",
         ignored_paths: list[str] | None = None,
+        feedback: FeedbackMemory | None = None,
     ) -> ReviewResult:
         """Execute the full review pipeline and return results.
 
@@ -62,6 +66,7 @@ class ReviewPipeline:
             author: Author of the changes.
             base_branch: Target branch for context.
             ignored_paths: Glob patterns for files to skip.
+            feedback: Past reviewer feedback for this repository, if any.
 
         Returns:
             ReviewResult with findings, summary, and metadata.
@@ -85,12 +90,23 @@ class ReviewPipeline:
 
         logger.info(f"Created {len(chunks)} chunks for review")
 
+        # Findings this repo's reviewers already rejected are removed before the
+        # summary is written, and collected so they can be shown, not lost.
+        suppressed: list[AIFinding] = []
+
+        def _suppress(findings: list[AIFinding]) -> list[AIFinding]:
+            kept, hidden = apply_feedback(findings, feedback)
+            suppressed.extend(hidden)
+            return kept
+
         # Step 3: Run review analysis and PR summary generation concurrently
         review_task = self.analyzer.analyze_pr(
             chunks=chunks,
             pr_title=title,
             pr_author=author,
             base_branch=base_branch,
+            feedback_hint=build_feedback_hint(feedback),
+            finding_filter=_suppress,
         )
         summary_task = self.analyzer.generate_pr_summary_with_usage(
             chunks=chunks,
@@ -108,6 +124,8 @@ class ReviewPipeline:
 
         # Post-analysis filtering: apply focus categories and severity threshold
         filtered_findings = self._filter_findings(all_findings)
+        if suppressed:
+            logger.info(f"Suppressed {len(suppressed)} finding(s) based on reviewer feedback")
         if len(filtered_findings) < len(all_findings):
             logger.info(
                 f"Filtered {len(all_findings)} → {len(filtered_findings)} findings "
@@ -131,6 +149,7 @@ class ReviewPipeline:
             chunks_processed=len(chunks),
             files_reviewed=len(file_changes),
             model_used=self.settings.ai_model,
+            suppressed_findings=suppressed,
         )
 
     def _filter_findings(self, findings: list[AIFinding]) -> list[AIFinding]:

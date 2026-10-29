@@ -32,7 +32,7 @@ REVIEW_PROMPT_TEMPLATE = """Review the following code changes from a pull reques
 
 ## Instructions
 {untrusted_notice}
-
+{feedback_section}
 Analyze the code changes above and provide your findings. For each issue found, provide:
 1. The exact file path
 2. The line number (from the new version of the file)
@@ -135,6 +135,7 @@ def build_review_prompt(
     pr_author: str,
     diff_content: str,
     base_branch: str = "main",
+    feedback_hint: str = "",
 ) -> str:
     """Build the review prompt for a code chunk.
 
@@ -143,10 +144,21 @@ def build_review_prompt(
         pr_author: The PR author's username.
         diff_content: Formatted diff content for this chunk.
         base_branch: The target branch name.
+        feedback_hint: Finding types this repository's reviewers rejected.
 
     Returns:
         Formatted prompt string ready for the LLM.
     """
+    feedback_section = ""
+    if feedback_hint:
+        # Titles come from earlier model output about PR code, so fence them as data.
+        feedback_section = (
+            "\nReviewers of this repository marked the following past findings as NOT helpful. "
+            "Do not report the same or substantially similar issues again unless the new code "
+            "has a clear, concrete defect (explain what is different):\n"
+            + wrap_untrusted("rejected_findings", feedback_hint)
+            + "\n"
+        )
     pr_context = (
         f"**Title**: {pr_title}\n"
         f"**Author**: {pr_author}\n"
@@ -156,6 +168,7 @@ def build_review_prompt(
         pr_context=wrap_untrusted("pr_context", pr_context),
         diff_content=wrap_untrusted("diff", diff_content),
         untrusted_notice=UNTRUSTED_NOTICE,
+        feedback_section=feedback_section,
     )
 
 

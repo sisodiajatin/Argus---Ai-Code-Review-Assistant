@@ -33,6 +33,7 @@ AI-powered code review that works everywhere — as a **GitHub webhook**, a **CL
 | **Re-push Detection** | Edits existing comment instead of spamming new ones |
 | **Commit Status Checks** | Sets pending/success/failure on commits |
 | **Dashboard** | Web UI with analytics, settings, and re-review buttons |
+| **Learns from Feedback** | Findings marked "not helpful" on the dashboard aren't raised again in that repo (critical findings are never hidden) |
 | **GitHub Action** | Drop-in CI/CD integration for any repo |
 | **Per-Repo Config** | `.argus.yaml` for project-specific settings |
 
@@ -295,6 +296,10 @@ Set environment variables in the Railway dashboard.
 2. Render auto-detects the `render.yaml` blueprint
 3. Add environment variables in the Render dashboard
 
+> **Free plan:** there's no persistent disk, so the SQLite database (review history
+> and feedback) resets on every redeploy or restart. Attach a disk (paid) or point
+> `DATABASE_URL` at a hosted database to keep it.
+
 ---
 
 ## Project Structure
@@ -404,6 +409,22 @@ All dashboard endpoints require a logged-in, allowlisted user (HTTP 401 otherwis
 | `GET` | `/auth/github/callback` | OAuth callback |
 | `GET` | `/auth/logout` | Clear session |
 | `GET` | `/auth/me` | Current user and whether login is required |
+
+---
+
+## Learning from Feedback
+
+Mark findings 👍 / 👎 on the dashboard. On the next review of the **same repository**:
+
+1. The model is told which kinds of findings reviewers rejected, and asked not to repeat them.
+2. Any new finding that still closely matches a rejected one (same category, near-identical
+   title) is removed. This holds even if the model ignores the instruction.
+
+Safeguards:
+- **Critical findings are never hidden.** A mis-click can't suppress a future security bug.
+- If the same kind of finding was also marked helpful, it is kept.
+- Hidden findings are listed in a collapsed **🔕 hidden** section of the PR summary.
+  Nothing disappears silently.
 
 ---
 
