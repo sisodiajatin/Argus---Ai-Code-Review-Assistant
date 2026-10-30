@@ -4,7 +4,7 @@ All notable changes to Argus are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-29
 
 ### Added
 - **SARIF 2.1.0 output.** `argus review --format sarif` or `--sarif FILE`
@@ -22,6 +22,19 @@ All notable changes to Argus are documented here. The format follows
   rejected, and close matches are filtered deterministically. Critical
   findings are never hidden. Hidden findings are listed in a collapsed
   section of the PR summary.
+
+### Fixed
+- Suggested fixes containing explanations were posted as GitHub
+  ```suggestion blocks, so "Apply suggestion" would have pasted the prose
+  into the source file. Only pure code becomes a one-click suggestion now.
+- "Event loop is closed" errors: SQLite connections outlived the event loop
+  that opened them (background reviews, tests). SQLite now uses no pool.
+- README: the quick start used a `argus config set` command that doesn't
+  exist (it's `argus config init`); added a full configuration reference.
+
+### Changed
+- GitHub Actions in CI, the publish workflow and the composite Action moved
+  to their Node 24 versions.
 
 ## [0.2.1] - 2026-10-28
 
@@ -109,6 +122,7 @@ use Argus as a CI gate.**
 
 - Initial release: CLI, GitHub webhook server, dashboard and GitHub Action.
 
+[0.3.0]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/compare/14b34fa...v0.2.0
 [0.1.0]: https://github.com/sisodiajatin/Argus---Ai-Code-Review-Assistant/commit/14b34fa
